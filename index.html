@@ -20,8 +20,6 @@ body {
   overflow-x: hidden;
 }
 
-/* HEADER */
-
 header {
   position: fixed;
   top: 0;
@@ -33,10 +31,8 @@ header {
 .logo {
   font-size: 15px;
   font-weight: 400;
-  letter-spacing: 0.02em;
+  letter-spacing: .02em;
 }
-
-/* MAIN LAYOUT */
 
 main {
   min-height: 100vh;
@@ -47,34 +43,19 @@ main {
   padding: 100px 20px 70px;
 }
 
-/* IMAGE GALLERY */
-
 .gallery {
   width: min(540px, 75vw);
-  height: min(360px, 50vw);
-  min-height: 220px;
+  aspect-ratio: 3 / 2;
   position: relative;
-  overflow: hidden;
-  background: #f3f3f3;
+  overflow: visible;
+  background: transparent;
   cursor: crosshair;
 }
 
-.gallery img {
+#glCanvas {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  transform: scale(1.08);
-  transition:
-    opacity 0.45s ease,
-    transform 0.5s cubic-bezier(.2,.7,.2,1);
-  will-change: transform;
-}
-
-.gallery img.active {
-  opacity: 1;
+  display: block;
 }
 
 .gallery-placeholder {
@@ -85,11 +66,10 @@ main {
   justify-content: center;
   color: #aaa;
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: .08em;
+  text-align: center;
   pointer-events: none;
 }
-
-/* GALLERY INFORMATION */
 
 .gallery-info {
   width: min(540px, 75vw);
@@ -99,8 +79,6 @@ main {
   font-size: 10px;
   color: #999;
 }
-
-/* NAVIGATION */
 
 .navigation {
   display: flex;
@@ -117,7 +95,7 @@ main {
   font-size: 12px;
   color: #999;
   cursor: pointer;
-  transition: color 0.25s ease;
+  transition: color .25s ease;
 }
 
 .navigation button:hover,
@@ -125,16 +103,12 @@ main {
   color: #111;
 }
 
-/* SOUND GALLERY */
-
 .sound-area {
   margin-top: 100px;
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: .08em;
   color: #aaa;
 }
-
-/* FOOTER */
 
 footer {
   position: fixed;
@@ -146,39 +120,17 @@ footer {
 }
 
 @media (max-width: 600px) {
-  header {
-    padding: 22px;
-  }
-
-  .logo {
-    font-size: 13px;
-  }
-
-  main {
-    padding-top: 90px;
-  }
-
-  .gallery {
-    width: 88vw;
-    height: 58vw;
-  }
-
-  .gallery-info {
-    width: 88vw;
-  }
-
+  header { padding: 22px; }
+  .logo { font-size: 13px; }
+  main { padding-top: 90px; }
+  .gallery { width: 88vw; }
+  .gallery-info { width: 88vw; }
   .navigation {
     gap: 22px;
     margin-top: 45px;
   }
-
-  .navigation button {
-    font-size: 10px;
-  }
-
-  footer {
-    padding: 18px 22px;
-  }
+  .navigation button { font-size: 10px; }
+  footer { padding: 18px 22px; }
 }
 </style>
 </head>
@@ -192,15 +144,15 @@ footer {
 <main>
 
   <div class="gallery" id="gallery">
+    <canvas id="glCanvas"></canvas>
     <div class="gallery-placeholder" id="placeholder">
-      IMAGE GALLERY
+      LOADING IMAGES
     </div>
-    <img id="galleryImage" alt="Selected project">
   </div>
 
   <div class="gallery-info">
     <span id="categoryLabel">LIGHT</span>
-    <span id="imageCounter">01 / 01</span>
+    <span id="imageCounter">01 / 04</span>
   </div>
 
   <nav class="navigation">
@@ -215,16 +167,9 @@ footer {
 
 </main>
 
-<footer>
-  AMSTERDAM
-</footer>
+<footer>AMSTERDAM</footer>
 
 <script>
-
-/* IMAGE COLLECTIONS
-   Add your images to the corresponding folders.
-*/
-
 const collections = {
   light: [
     "images/light/01.jpeg",
@@ -232,14 +177,12 @@ const collections = {
     "images/light/03.jpeg",
     "images/light/04.jpeg"
   ],
-
   audiovisuals: [
     "images/audiovisuals/01.jpg",
     "images/audiovisuals/02.jpg",
     "images/audiovisuals/03.jpg",
     "images/audiovisuals/04.jpg"
   ],
-
   live: [
     "images/live-performances/01.jpg",
     "images/live-performances/02.jpg",
@@ -248,106 +191,352 @@ const collections = {
   ]
 };
 
-let currentCategory = "light";
-let currentIndex = 0;
-let mouseX = 0;
-let mouseY = 0;
-let lastChange = 0;
+const canvas = document.getElementById("glCanvas");
+const gl = canvas.getContext("webgl", {
+  alpha: true,
+  antialias: true
+});
 
-const gallery = document.getElementById("gallery");
-const image = document.getElementById("galleryImage");
 const placeholder = document.getElementById("placeholder");
 const counter = document.getElementById("imageCounter");
 const label = document.getElementById("categoryLabel");
-
 const buttons = document.querySelectorAll(".navigation button");
 
-function showImage() {
-  const images = collections[currentCategory];
-  const path = images[currentIndex];
+let category = "light";
+let currentIndex = 0;
+let images = [];
+let textures = [];
+let mouse = { x: 0.5, y: 0.5 };
+let smoothMouse = { x: 0.5, y: 0.5 };
+let mixProgress = 0;
+let transitionStart = 0;
+let transitionDuration = 2600;
+let lastTransition = performance.now();
+let animationFrame = 0;
+let ready = false;
 
-  image.classList.remove("active");
+const vertexShader = `
+attribute vec2 position;
+varying vec2 vUv;
 
-  const nextImage = new Image();
+void main() {
+  vUv = position * 0.5 + 0.5;
+  gl_Position = vec4(position, 0.0, 1.0);
+}
+`;
 
-  nextImage.onload = () => {
-    image.src = path;
-    image.classList.add("active");
+const fragmentShader = `
+precision highp float;
+
+varying vec2 vUv;
+
+uniform sampler2D imageA;
+uniform sampler2D imageB;
+uniform float progress;
+uniform float time;
+uniform float strength;
+uniform vec2 mouse;
+uniform vec2 resolution;
+
+float random(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+
+  return mix(
+    mix(random(i), random(i + vec2(1.0, 0.0)), f.x),
+    mix(random(i + vec2(0.0, 1.0)), random(i + vec2(1.0, 1.0)), f.x),
+    f.y
+  );
+}
+
+void main() {
+  vec2 uv = vUv;
+
+  float n1 = noise(uv * vec2(9.0, 13.0) + time * 0.08);
+  float n2 = noise(uv * vec2(25.0, 5.0) - time * 0.04);
+
+  float mouseDistance = distance(uv, mouse);
+  float mouseInfluence = exp(-mouseDistance * 7.0);
+
+  float displacement =
+    ((n1 - 0.5) * 0.055 +
+    (n2 - 0.5) * 0.025 +
+    mouseInfluence * 0.035) * strength;
+
+  vec2 uvA = uv + vec2(displacement, displacement * 0.35);
+  vec2 uvB = uv - vec2(displacement * 0.8, displacement);
+
+  uvA = clamp(uvA, 0.002, 0.998);
+  uvB = clamp(uvB, 0.002, 0.998);
+
+  vec4 a = texture2D(imageA, uvA);
+  vec4 b = texture2D(imageB, uvB);
+
+  float brightnessA = dot(a.rgb, vec3(0.299, 0.587, 0.114));
+  float brightnessB = dot(b.rgb, vec3(0.299, 0.587, 0.114));
+
+  float pixelBands = floor(uv.y * 180.0) / 180.0;
+  float pixelNoise = noise(vec2(uv.x * 14.0, pixelBands * 2.0));
+
+  float field =
+    pixelNoise +
+    (brightnessB - brightnessA) * 0.22 +
+    (n1 - 0.5) * 0.25;
+
+  float threshold = 1.0 - progress;
+
+  float blend = smoothstep(
+    threshold - 0.18,
+    threshold + 0.18,
+    field
+  );
+
+  vec3 color = mix(a.rgb, b.rgb, blend);
+
+  float edgeDistance = min(
+    min(uv.x, 1.0 - uv.x),
+    min(uv.y, 1.0 - uv.y)
+  );
+
+  float edgeFade = smoothstep(0.0, 0.075, edgeDistance);
+
+  gl_FragColor = vec4(color, edgeFade);
+}
+`;
+
+function compileShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    console.error(gl.getShaderInfoLog(shader));
+    throw new Error("Shader compilation failed");
+  }
+
+  return shader;
+}
+
+function createProgram() {
+  const program = gl.createProgram();
+
+  gl.attachShader(program, compileShader(gl.VERTEX_SHADER, vertexShader));
+  gl.attachShader(program, compileShader(gl.FRAGMENT_SHADER, fragmentShader));
+
+  gl.linkProgram(program);
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(program));
+  }
+
+  return program;
+}
+
+if (!gl) {
+  placeholder.textContent = "WEBGL NOT SUPPORTED";
+  throw new Error("WebGL is not supported in this browser.");
+}
+
+const program = createProgram();
+gl.useProgram(program);
+
+const vertices = new Float32Array([
+  -1, -1,
+   1, -1,
+  -1,  1,
+  -1,  1,
+   1, -1,
+   1,  1
+]);
+
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+const position = gl.getAttribLocation(program, "position");
+gl.enableVertexAttribArray(position);
+gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+const uniforms = {
+  imageA: gl.getUniformLocation(program, "imageA"),
+  imageB: gl.getUniformLocation(program, "imageB"),
+  progress: gl.getUniformLocation(program, "progress"),
+  time: gl.getUniformLocation(program, "time"),
+  strength: gl.getUniformLocation(program, "strength"),
+  mouse: gl.getUniformLocation(program, "mouse"),
+  resolution: gl.getUniformLocation(program, "resolution")
+};
+
+function makeTexture(image) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    image
+  );
+
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  return texture;
+}
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+function loadImage(path) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not load " + path));
+    img.src = path;
+  });
+}
+
+async function loadCollection() {
+  ready = false;
+  cancelAnimationFrame(animationFrame);
+
+  placeholder.style.display = "flex";
+  placeholder.textContent = "LOADING IMAGES";
+
+  images = [];
+  textures = [];
+
+  const paths = collections[category];
+
+  try {
+    const loaded = await Promise.all(paths.map(loadImage));
+
+    images = loaded;
+    textures = loaded.map(makeTexture);
+
+    currentIndex = 0;
+    mixProgress = 0;
+    lastTransition = performance.now();
+    transitionStart = 0;
+
+    label.textContent = category.toUpperCase();
+    counter.textContent = "01 / " + String(images.length).padStart(2, "0");
+
     placeholder.style.display = "none";
-  };
+    ready = true;
 
-  nextImage.onerror = () => {
-    image.classList.remove("active");
+    render(performance.now());
+  } catch (error) {
+    console.error(error);
     placeholder.style.display = "flex";
-    placeholder.textContent =
-      "ADD IMAGES TO " + currentCategory.toUpperCase();
-  };
-
-  nextImage.src = path;
-
-  counter.textContent =
-    String(currentIndex + 1).padStart(2, "0") +
-    " / " +
-    String(images.length).padStart(2, "0");
-
-  label.textContent = currentCategory.toUpperCase();
+    placeholder.textContent = "CHECK IMAGE FILES IN " + category.toUpperCase();
+  }
 }
 
-function changeCategory(category) {
-  currentCategory = category;
-  currentIndex = 0;
+function render(now) {
+  if (!ready || images.length === 0) return;
 
-  buttons.forEach(button => {
-    button.classList.toggle(
-      "active",
-      button.dataset.category === category
+  const elapsed = now - lastTransition;
+
+  if (elapsed > 6500 && transitionStart === 0) {
+    transitionStart = now;
+  }
+
+  if (transitionStart > 0) {
+    mixProgress = Math.min(
+      (now - transitionStart) / transitionDuration,
+      1
     );
-  });
 
-  showImage();
+    if (mixProgress >= 1) {
+      currentIndex = (currentIndex + 1) % images.length;
+      mixProgress = 0;
+      transitionStart = 0;
+      lastTransition = now;
+
+      counter.textContent =
+        String(currentIndex + 1).padStart(2, "0") +
+        " / " +
+        String(images.length).padStart(2, "0");
+    }
+  }
+
+  const nextIndex = (currentIndex + 1) % images.length;
+
+  smoothMouse.x += (mouse.x - smoothMouse.x) * 0.07;
+  smoothMouse.y += (mouse.y - smoothMouse.y) * 0.07;
+
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.useProgram(program);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, textures[currentIndex]);
+  gl.uniform1i(uniforms.imageA, 0);
+
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, textures[nextIndex]);
+  gl.uniform1i(uniforms.imageB, 1);
+
+  gl.uniform1f(uniforms.progress, mixProgress);
+  gl.uniform1f(uniforms.time, now * 0.001);
+  gl.uniform1f(uniforms.strength, 0.5);
+  gl.uniform2f(uniforms.mouse, smoothMouse.x, smoothMouse.y);
+  gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  animationFrame = requestAnimationFrame(render);
 }
 
-buttons.forEach(button => {
-  button.addEventListener("click", () => {
-    changeCategory(button.dataset.category);
-  });
-});
-
-/* CHANGE IMAGE WITH MOUSE MOVEMENT */
+const gallery = document.getElementById("gallery");
 
 gallery.addEventListener("pointermove", event => {
   const rect = gallery.getBoundingClientRect();
 
-  mouseX = (event.clientX - rect.left) / rect.width;
-  mouseY = (event.clientY - rect.top) / rect.height;
-
-  const displacementX = (mouseX - 0.5) * 22;
-  const displacementY = (mouseY - 0.5) * 22;
-
-  image.style.transform =
-    `scale(1.12) translate(${displacementX}px, ${displacementY}px)`;
-
-  const now = Date.now();
-
-  if (now - lastChange > 450) {
-    currentIndex =
-      (currentIndex + 1) % collections[currentCategory].length;
-
-    lastChange = now;
-    showImage();
-  }
+  mouse.x = (event.clientX - rect.left) / rect.width;
+  mouse.y = 1.0 - (event.clientY - rect.top) / rect.height;
 });
-
-/* RESET IMAGE POSITION */
 
 gallery.addEventListener("pointerleave", () => {
-  image.style.transform = "scale(1.08)";
+  mouse.x = 0.5;
+  mouse.y = 0.5;
 });
 
-/* START */
+buttons.forEach(button => {
+  button.addEventListener("click", () => {
+    category = button.dataset.category;
 
-showImage();
+    buttons.forEach(item => {
+      item.classList.toggle("active", item === button);
+    });
 
+    loadCollection();
+  });
+});
+
+loadCollection();
 </script>
 
 </body>
