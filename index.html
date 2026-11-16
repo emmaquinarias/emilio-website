@@ -1,0 +1,354 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emilio Arias</title>
+
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #fff;
+  color: #171717;
+  font-family: Helvetica, Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+/* HEADER */
+
+header {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 10;
+  padding: 30px 38px;
+}
+
+.logo {
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+/* MAIN LAYOUT */
+
+main {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 20px 70px;
+}
+
+/* IMAGE GALLERY */
+
+.gallery {
+  width: min(540px, 75vw);
+  height: min(360px, 50vw);
+  min-height: 220px;
+  position: relative;
+  overflow: hidden;
+  background: #f3f3f3;
+  cursor: crosshair;
+}
+
+.gallery img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(1.08);
+  transition:
+    opacity 0.45s ease,
+    transform 0.5s cubic-bezier(.2,.7,.2,1);
+  will-change: transform;
+}
+
+.gallery img.active {
+  opacity: 1;
+}
+
+.gallery-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+/* GALLERY INFORMATION */
+
+.gallery-info {
+  width: min(540px, 75vw);
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 10px;
+  color: #999;
+}
+
+/* NAVIGATION */
+
+.navigation {
+  display: flex;
+  justify-content: center;
+  gap: 38px;
+  margin-top: 65px;
+  flex-wrap: wrap;
+}
+
+.navigation button {
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: #999;
+  cursor: pointer;
+  transition: color 0.25s ease;
+}
+
+.navigation button:hover,
+.navigation button.active {
+  color: #111;
+}
+
+/* SOUND GALLERY */
+
+.sound-area {
+  margin-top: 100px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #aaa;
+}
+
+/* FOOTER */
+
+footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  padding: 25px 38px;
+  font-size: 10px;
+  color: #aaa;
+}
+
+@media (max-width: 600px) {
+  header {
+    padding: 22px;
+  }
+
+  .logo {
+    font-size: 13px;
+  }
+
+  main {
+    padding-top: 90px;
+  }
+
+  .gallery {
+    width: 88vw;
+    height: 58vw;
+  }
+
+  .gallery-info {
+    width: 88vw;
+  }
+
+  .navigation {
+    gap: 22px;
+    margin-top: 45px;
+  }
+
+  .navigation button {
+    font-size: 10px;
+  }
+
+  footer {
+    padding: 18px 22px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <div class="logo">EMILIO ARIAS</div>
+</header>
+
+<main>
+
+  <div class="gallery" id="gallery">
+    <div class="gallery-placeholder" id="placeholder">
+      IMAGE GALLERY
+    </div>
+    <img id="galleryImage" alt="Selected project">
+  </div>
+
+  <div class="gallery-info">
+    <span id="categoryLabel">LIGHT</span>
+    <span id="imageCounter">01 / 01</span>
+  </div>
+
+  <nav class="navigation">
+    <button class="active" data-category="light">LIGHT</button>
+    <button data-category="audiovisuals">AUDIO VISUALS</button>
+    <button data-category="live">LIVE PERFORMANCES</button>
+  </nav>
+
+  <div class="sound-area">
+    SOUND GALLERY — COMING SOON
+  </div>
+
+</main>
+
+<footer>
+  AMSTERDAM
+</footer>
+
+<script>
+
+/* IMAGE COLLECTIONS
+   Add your images to the corresponding folders.
+*/
+
+const collections = {
+  light: [
+    "images/light/01.jpg",
+    "images/light/02.jpg",
+    "images/light/03.jpg",
+    "images/light/04.jpg"
+  ],
+
+  audiovisuals: [
+    "images/audiovisuals/01.jpg",
+    "images/audiovisuals/02.jpg",
+    "images/audiovisuals/03.jpg",
+    "images/audiovisuals/04.jpg"
+  ],
+
+  live: [
+    "images/live-performances/01.jpg",
+    "images/live-performances/02.jpg",
+    "images/live-performances/03.jpg",
+    "images/live-performances/04.jpg"
+  ]
+};
+
+let currentCategory = "light";
+let currentIndex = 0;
+let mouseX = 0;
+let mouseY = 0;
+let lastChange = 0;
+
+const gallery = document.getElementById("gallery");
+const image = document.getElementById("galleryImage");
+const placeholder = document.getElementById("placeholder");
+const counter = document.getElementById("imageCounter");
+const label = document.getElementById("categoryLabel");
+
+const buttons = document.querySelectorAll(".navigation button");
+
+function showImage() {
+  const images = collections[currentCategory];
+  const path = images[currentIndex];
+
+  image.classList.remove("active");
+
+  const nextImage = new Image();
+
+  nextImage.onload = () => {
+    image.src = path;
+    image.classList.add("active");
+    placeholder.style.display = "none";
+  };
+
+  nextImage.onerror = () => {
+    image.classList.remove("active");
+    placeholder.style.display = "flex";
+    placeholder.textContent =
+      "ADD IMAGES TO " + currentCategory.toUpperCase();
+  };
+
+  nextImage.src = path;
+
+  counter.textContent =
+    String(currentIndex + 1).padStart(2, "0") +
+    " / " +
+    String(images.length).padStart(2, "0");
+
+  label.textContent = currentCategory.toUpperCase();
+}
+
+function changeCategory(category) {
+  currentCategory = category;
+  currentIndex = 0;
+
+  buttons.forEach(button => {
+    button.classList.toggle(
+      "active",
+      button.dataset.category === category
+    );
+  });
+
+  showImage();
+}
+
+buttons.forEach(button => {
+  button.addEventListener("click", () => {
+    changeCategory(button.dataset.category);
+  });
+});
+
+/* CHANGE IMAGE WITH MOUSE MOVEMENT */
+
+gallery.addEventListener("pointermove", event => {
+  const rect = gallery.getBoundingClientRect();
+
+  mouseX = (event.clientX - rect.left) / rect.width;
+  mouseY = (event.clientY - rect.top) / rect.height;
+
+  const displacementX = (mouseX - 0.5) * 22;
+  const displacementY = (mouseY - 0.5) * 22;
+
+  image.style.transform =
+    `scale(1.12) translate(${displacementX}px, ${displacementY}px)`;
+
+  const now = Date.now();
+
+  if (now - lastChange > 450) {
+    currentIndex =
+      (currentIndex + 1) % collections[currentCategory].length;
+
+    lastChange = now;
+    showImage();
+  }
+});
+
+/* RESET IMAGE POSITION */
+
+gallery.addEventListener("pointerleave", () => {
+  image.style.transform = "scale(1.08)";
+});
+
+/* START */
+
+showImage();
+
+</script>
+
+</body>
+</html>
