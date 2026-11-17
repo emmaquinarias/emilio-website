@@ -3,417 +3,599 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Emilio Arias</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMILIO ARIAS</title>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: #000;
-  cursor: crosshair;
-  font-family: Helvetica, Arial, sans-serif;
-}
-
-#art {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-#identity {
-  position: fixed;
-  z-index: 2;
-  top: 24px;
-  right: 24px;
-  padding: 14px 17px;
-  background: #f5260f;
-  color: #000;
-  font-size: 13px;
-  font-weight: 400;
-  letter-spacing: .025em;
-  white-space: nowrap;
-}
-
-@media (max-width: 600px) {
-  #identity {
-    top: 15px;
-    right: 15px;
-    font-size: 11px;
-    padding: 11px 13px;
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
   }
-}
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    cursor: crosshair;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  #identity {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 10;
+    background: #fff;
+    color: #000;
+    padding: 15px 19px;
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    line-height: 1;
+    user-select: none;
+  }
+
+  #sound-status {
+    position: fixed;
+    left: 20px;
+    bottom: 18px;
+    z-index: 10;
+    color: rgba(255,255,255,0.55);
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
 </style>
 </head>
 
 <body>
 
-<canvas id="art"></canvas>
 <div id="identity">EMILIO ARIAS</div>
+<div id="sound-status">MOVE TO TUNE THE FIELD · CLICK FOR SOUND</div>
+<canvas id="visual"></canvas>
 
 <script>
-const canvas = document.getElementById("art");
+(() => {
+  const canvas = document.getElementById("visual");
+  const gl = canvas.getContext("webgl", {
+    alpha: false,
+    antialias: false,
+    powerPreference: "high-performance"
+  });
 
-const gl = canvas.getContext("webgl", {
-  alpha: false,
-  antialias: true,
-  powerPreference: "high-performance"
-});
-
-if (!gl) {
-  document.body.innerHTML =
-    "WebGL is not supported in this browser.";
-  throw new Error("WebGL unavailable");
-}
-
-/* Enable smooth line rendering BEFORE compiling shaders */
-const derivatives = gl.getExtension("OES_standard_derivatives");
-
-if (!derivatives) {
-  console.error("OES_standard_derivatives unavailable");
-}
-
-/* VERTEX SHADER */
-
-const vertexShaderSource = `
-attribute vec2 position;
-
-void main() {
-  gl_Position = vec4(position, 0.0, 1.0);
-}
-`;
-
-/* FRAGMENT SHADER */
-
-const fragmentShaderSource = `
-#extension GL_OES_standard_derivatives : enable
-
-precision highp float;
-
-uniform vec2 resolution;
-uniform vec2 mouse;
-uniform float time;
-uniform float speed;
-
-const float RED = 0.960784;
-const float GREEN = 0.149020;
-const float BLUE = 0.058824;
-
-/* Anti-aliased repeating lines */
-
-float linePattern(float value, float thickness) {
-  float distanceToLine =
-    abs(fract(value + 0.5) - 0.5);
-
-  float aa = max(fwidth(value), 0.0001);
-
-  return 1.0 - smoothstep(
-    thickness,
-    thickness + aa,
-    distanceToLine
-  );
-}
-
-void main() {
-
-  vec2 uv = gl_FragCoord.xy / resolution.xy;
-
-  float aspect = resolution.x / resolution.y;
-
-  /* Mouse distance from the neutral centre */
-
-  float horizontalControl = mouse.x - 0.5;
-  float verticalControl = mouse.y - 0.5;
-
-  /*
-    CENTRE = ORIGINAL DENSITY
-
-    LEFT  = fewer horizontal cycles / wider spacing
-    RIGHT = more horizontal cycles / tighter spacing
-
-    UP    = more vertical cycles / more lines
-    DOWN  = fewer vertical cycles / fewer lines
-  */
-
-  float baseX = 115.0;
-  float baseY = 130.0;
-
-  float frequencyX =
-    baseX + horizontalControl * 170.0;
-
-  float frequencyY =
-    baseY + verticalControl * 190.0;
-
-  /* Keep frequencies safely positive */
-
-  frequencyX = max(frequencyX, 25.0);
-  frequencyY = max(frequencyY, 25.0);
-
-  /*
-    The mouse is also the centre of the resonance.
-    Its position changes the wave structure.
-  */
-
-  vec2 p = uv - mouse;
-  p.x *= aspect;
-
-  float distanceFromMouse = length(p);
-  float angle = atan(p.y, p.x);
-
-  /* Gentle animated movement */
-
-  float organicWave =
-    sin(p.y * 9.0 + time * 0.35) * 1.8
-    + sin(p.y * 17.0 - time * 0.2) * 0.6;
-
-  /* Vertical line structure */
-
-  float verticalField =
-    uv.x * frequencyX
-    + organicWave
-    + sin(p.y * 5.0 + time * 0.2) * 0.8;
-
-  float verticalLines =
-    linePattern(verticalField, 0.065);
-
-  /* Horizontal line structure */
-
-  float horizontalField =
-    uv.y * frequencyY
-    + sin(p.x * 9.0 + time * 0.25) * 1.4;
-
-  float horizontalLines =
-    linePattern(horizontalField, 0.065);
-
-  /* Concentric resonance around the cursor */
-
-  float ringField =
-    distanceFromMouse * 155.0
-    + sin(angle * 5.0 + time * 0.2) * 2.0;
-
-  float rings =
-    linePattern(ringField, 0.055);
-
-  /* Interference between the line systems */
-
-  float interferenceField =
-    verticalField * 0.55
-    + horizontalField * 0.45;
-
-  float interference =
-    linePattern(interferenceField * 1.5, 0.07);
-
-  /* Movement energy */
-
-  float energy =
-    exp(-distanceFromMouse * 2.2) * speed;
-
-  /* Combine all patterns */
-
-  float pattern = max(
-    verticalLines,
-    horizontalLines * 0.35
-  );
-
-  pattern = max(pattern, rings * 0.75);
-  pattern = max(pattern, interference * 0.30);
-  pattern = max(pattern, rings * energy * 0.8);
-
-  /* Red line intensity */
-
-  float intensity = clamp(pattern, 0.0, 1.0);
-
-  vec3 red = vec3(RED, GREEN, BLUE);
-
-  vec3 finalColor = red * intensity;
-
-  gl_FragColor = vec4(finalColor, 1.0);
-}
-`;
-
-/* COMPILE SHADERS */
-
-function compileShader(type, source) {
-  const shader = gl.createShader(type);
-
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const message = gl.getShaderInfoLog(shader);
-    console.error(message);
-    throw new Error(message);
+  if (!gl) {
+    document.body.innerHTML =
+      "<p style='color:white;padding:30px;font-family:Arial'>WebGL is not supported by this browser.</p>";
+    return;
   }
 
-  return shader;
-}
+  const derivatives = gl.getExtension("OES_standard_derivatives");
 
-const program = gl.createProgram();
+  if (!derivatives) {
+    document.body.innerHTML =
+      "<p style='color:white;padding:30px;font-family:Arial'>This browser does not support the required WebGL extension.</p>";
+    return;
+  }
 
-gl.attachShader(
-  program,
-  compileShader(gl.VERTEX_SHADER, vertexShaderSource)
-);
+  const vertexShaderSource = `
+    attribute vec2 position;
 
-gl.attachShader(
-  program,
-  compileShader(gl.FRAGMENT_SHADER, fragmentShaderSource)
-);
+    void main() {
+      gl_Position = vec4(position, 0.0, 1.0);
+    }
+  `;
 
-gl.linkProgram(program);
+  const fragmentShaderSource = `
+    #extension GL_OES_standard_derivatives : enable
+    precision highp float;
 
-if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-  throw new Error(gl.getProgramInfoLog(program));
-}
+    uniform vec2 resolution;
+    uniform float time;
+    uniform vec2 mouse;
+    uniform vec2 clickPosition;
+    uniform float rippleStart;
+    uniform float rippleActive;
 
-gl.useProgram(program);
+    float linePattern(vec2 p, float frequency, float phase) {
+      float wave = sin(p.x * frequency + phase);
+      float width = 0.035;
+      return smoothstep(width, 0.0, abs(wave));
+    }
 
-/* FULL-SCREEN GEOMETRY */
+    void main() {
+      vec2 uv = gl_FragCoord.xy / resolution.xy;
 
-const vertices = new Float32Array([
-  -1, -1,
-   1, -1,
-  -1,  1,
-  -1,  1,
-   1, -1,
-   1,  1
-]);
+      vec2 p = uv - 0.5;
+      p.x *= resolution.x / resolution.y;
 
-const buffer = gl.createBuffer();
+      vec2 m = mouse - 0.5;
+      m.x *= resolution.x / resolution.y;
 
-gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+      float t = time;
 
-const position = gl.getAttribLocation(program, "position");
+      // Mouse position controls line density and spacing.
+      float verticalControl = (mouse.y - 0.5) * 2.0;
+      float horizontalControl = (mouse.x - 0.5) * 2.0;
 
-gl.enableVertexAttribArray(position);
-gl.vertexAttribPointer(
-  position,
-  2,
-  gl.FLOAT,
-  false,
-  0,
-  0
-);
+      float density = 42.0 + verticalControl * 35.0;
+      float spacing = 30.0 + horizontalControl * 22.0;
 
-/* SHADER CONTROLS */
+      density = max(density, 5.0);
+      spacing = max(spacing, 5.0);
 
-const uniforms = {
-  resolution: gl.getUniformLocation(program, "resolution"),
-  mouse: gl.getUniformLocation(program, "mouse"),
-  time: gl.getUniformLocation(program, "time"),
-  speed: gl.getUniformLocation(program, "speed")
-};
+      // Subtle movement in the field.
+      float movement = sin(p.y * 3.0 + t * 0.25) * 0.12;
 
-/* HIGH-RESOLUTION CANVAS */
+      float distortion = sin(p.y * 8.0 + t * 0.35) * 0.025;
+      distortion += cos(p.x * 5.0 - t * 0.2) * 0.018;
 
-function resize() {
-  const pixelRatio = Math.min(
-    window.devicePixelRatio || 1,
-    2
+      // Lines react to mouse position.
+      float mouseDistance = distance(p, m);
+      float mouseInfluence = exp(-mouseDistance * 2.2);
+
+      float field = p.x + distortion * (1.0 + mouseInfluence * 3.0);
+      field += movement * 0.1;
+
+      float horizontalWave = sin(field * spacing);
+      float verticalWave = sin((p.y + distortion) * density);
+
+      float horizontalLines = smoothstep(
+        0.12,
+        0.0,
+        abs(horizontalWave)
+      );
+
+      float verticalLines = smoothstep(
+        0.12,
+        0.0,
+        abs(verticalWave)
+      );
+
+      // Interference between the two line systems.
+      float interference = abs(
+        sin(field * spacing * 0.5 + sin(p.y * density * 0.5))
+      );
+
+      float pattern = max(
+        horizontalLines,
+        verticalLines * 0.75
+      );
+
+      pattern = max(pattern, interference * 0.25);
+
+      // Fine secondary lines.
+      float fineLines = abs(
+        sin((field + p.y * 0.08) * spacing * 2.0)
+      );
+
+      fineLines = smoothstep(0.08, 0.0, fineLines);
+      pattern = max(pattern, fineLines * 0.3);
+
+      // Mouse movement creates a local distortion.
+      pattern += mouseInfluence * 0.16;
+
+      // Ripple: one expanding circular wave, fading over four seconds.
+      float elapsed = t - rippleStart;
+      float rippleAge = max(elapsed, 0.0);
+
+      float rippleDistance = distance(uv, clickPosition);
+      float rippleRadius = rippleAge * 0.24;
+
+      float ringWidth = 0.012 + rippleAge * 0.003;
+      float ring = exp(
+        -pow((rippleDistance - rippleRadius) / ringWidth, 2.0)
+      );
+
+      float secondaryRing = exp(
+        -pow((rippleDistance - rippleRadius * 0.72) / (ringWidth * 1.6), 2.0)
+      );
+
+      float rippleFade = exp(-rippleAge * 1.15);
+      float ripple = (ring + secondaryRing * 0.35)
+                   * rippleFade
+                   * rippleActive;
+
+      // A subtle circular disturbance behind the expanding ring.
+      float disturbance = sin(
+        (rippleDistance - rippleRadius) * 90.0
+      );
+
+      disturbance *= exp(-abs(rippleDistance - rippleRadius) * 7.0);
+      disturbance *= rippleFade * rippleActive;
+
+      pattern += ripple * 1.2;
+      pattern += disturbance * 0.12;
+
+      // Flicker is linked to the visual field.
+      float flicker = 0.94 + 0.06 * sin(t * 17.0);
+      flicker *= 0.97 + 0.03 * sin(t * 31.0 + p.y * 8.0);
+
+      float intensity = clamp(pattern * flicker, 0.0, 1.0);
+
+      // Pure black and white output.
+      vec3 finalColor = vec3(intensity);
+
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
+  `;
+
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+
+    return shader;
+  }
+
+  const vertexShader = compileShader(
+    gl.VERTEX_SHADER,
+    vertexShaderSource
   );
 
-  canvas.width = Math.round(innerWidth * pixelRatio);
-  canvas.height = Math.round(innerHeight * pixelRatio);
-
-  gl.viewport(0, 0, canvas.width, canvas.height);
-
-  gl.uniform2f(
-    uniforms.resolution,
-    canvas.width,
-    canvas.height
+  const fragmentShader = compileShader(
+    gl.FRAGMENT_SHADER,
+    fragmentShaderSource
   );
-}
 
-window.addEventListener("resize", resize);
-resize();
+  if (!vertexShader || !fragmentShader) return;
 
-/* MOUSE POSITION */
+  const program = gl.createProgram();
 
-let mouse = {
-  x: 0.5,
-  y: 0.5
-};
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
 
-let smoothMouse = {
-  x: 0.5,
-  y: 0.5
-};
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(program));
+    return;
+  }
 
-let previousMouse = {
-  x: 0.5,
-  y: 0.5
-};
+  gl.useProgram(program);
 
-let speed = 0;
+  const vertices = new Float32Array([
+    -1, -1,
+     1, -1,
+    -1,  1,
+    -1,  1,
+     1, -1,
+     1,  1
+  ]);
 
-window.addEventListener("pointermove", event => {
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
 
-  mouse.x = Math.max(
+  const positionLocation = gl.getAttribLocation(program, "position");
+
+  gl.enableVertexAttribArray(positionLocation);
+  gl.vertexAttribPointer(
+    positionLocation,
+    2,
+    gl.FLOAT,
+    false,
     0,
-    Math.min(1, event.clientX / innerWidth)
+    0
   );
 
-  mouse.y = 1.0 - Math.max(
-    0,
-    Math.min(1, event.clientY / innerHeight)
-  );
+  const uniforms = {
+    resolution: gl.getUniformLocation(program, "resolution"),
+    time: gl.getUniformLocation(program, "time"),
+    mouse: gl.getUniformLocation(program, "mouse"),
+    clickPosition: gl.getUniformLocation(program, "clickPosition"),
+    rippleStart: gl.getUniformLocation(program, "rippleStart"),
+    rippleActive: gl.getUniformLocation(program, "rippleActive")
+  };
 
-});
+  let width = 0;
+  let height = 0;
+  let startTime = performance.now();
 
-/* RENDER LOOP */
+  let mouse = { x: 0.5, y: 0.5 };
+  let targetMouse = { x: 0.5, y: 0.5 };
 
-function render(now) {
+  let clickPosition = { x: 0.5, y: 0.5 };
+  let rippleStart = -10;
+  let rippleActive = 0;
 
-  const time = now * 0.001;
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-  const dx = mouse.x - previousMouse.x;
-  const dy = mouse.y - previousMouse.y;
+    width = Math.floor(window.innerWidth * dpr);
+    height = Math.floor(window.innerHeight * dpr);
 
-  const velocity = Math.sqrt(dx * dx + dy * dy);
+    canvas.width = width;
+    canvas.height = height;
 
-  speed += (
-    Math.min(velocity * 25.0, 1.0) - speed
-  ) * 0.08;
+    gl.viewport(0, 0, width, height);
+    gl.uniform2f(uniforms.resolution, width, height);
+  }
 
-  /* Smooth mouse response */
+  window.addEventListener("resize", resize);
+  resize();
 
-  smoothMouse.x += (
-    mouse.x - smoothMouse.x
-  ) * 0.07;
+  // --------------------------------------------------
+  // MOUSE INTERACTION
+  // --------------------------------------------------
 
-  smoothMouse.y += (
-    mouse.y - smoothMouse.y
-  ) * 0.07;
+  window.addEventListener("pointermove", (event) => {
+    targetMouse.x = event.clientX / window.innerWidth;
+    targetMouse.y = 1.0 - event.clientY / window.innerHeight;
+  });
 
-  previousMouse.x = mouse.x;
-  previousMouse.y = mouse.y;
+  // --------------------------------------------------
+  // AUDIO ENGINE
+  // --------------------------------------------------
 
-  gl.uniform2f(
-    uniforms.mouse,
-    smoothMouse.x,
-    smoothMouse.y
-  );
+  let audioContext = null;
+  let masterGain = null;
+  let audioStarted = false;
 
-  gl.uniform1f(uniforms.time, time);
-  gl.uniform1f(uniforms.speed, speed);
+  function createNoiseBuffer(context) {
+    const bufferSize = context.sampleRate * 4;
+    const noiseBuffer = context.createBuffer(
+      1,
+      bufferSize,
+      context.sampleRate
+    );
 
-  gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const output = noiseBuffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = Math.random() * 2 - 1;
+    }
+
+    return noiseBuffer;
+  }
+
+  function startAudio() {
+    if (audioStarted) return;
+
+    const AudioContextClass =
+      window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) return;
+
+    audioContext = new AudioContextClass();
+
+    if (audioContext.state === "suspended") {
+      audioContext.resume();
+    }
+
+    masterGain = audioContext.createGain();
+    masterGain.gain.value = 0.7;
+    masterGain.connect(audioContext.destination);
+
+    // Continuous E1 bass drone: approximately 41.2 Hz.
+    const bass = audioContext.createOscillator();
+    const bassGain = audioContext.createGain();
+
+    bass.type = "sine";
+    bass.frequency.value = 41.203;
+
+    bassGain.gain.value = 0.045;
+
+    const bassLFO = audioContext.createOscillator();
+    const bassLFOGain = audioContext.createGain();
+
+    bassLFO.frequency.value = 0.09;
+    bassLFOGain.gain.value = 0.018;
+
+    bassLFO.connect(bassLFOGain);
+    bassLFOGain.connect(bassGain.gain);
+
+    bass.connect(bassGain);
+    bassGain.connect(masterGain);
+
+    bass.start();
+    bassLFO.start();
+
+    // Low filtered noise: an ocean-like sound layer.
+    const noise = audioContext.createBufferSource();
+    noise.buffer = createNoiseBuffer(audioContext);
+    noise.loop = true;
+
+    const noiseFilter = audioContext.createBiquadFilter();
+    noiseFilter.type = "lowpass";
+    noiseFilter.frequency.value = 220;
+    noiseFilter.Q.value = 0.7;
+
+    const noiseGain = audioContext.createGain();
+    noiseGain.gain.value = 0.025;
+
+    const noisePan = audioContext.createStereoPanner();
+
+    // Slow filter movement.
+    const filterLFO = audioContext.createOscillator();
+    const filterLFOGain = audioContext.createGain();
+
+    filterLFO.frequency.value = 0.12;
+    filterLFOGain.gain.value = 100;
+
+    filterLFO.connect(filterLFOGain);
+    filterLFOGain.connect(noiseFilter.frequency);
+
+    // Slow stereo movement.
+    const panLFO = audioContext.createOscillator();
+    const panLFOGain = audioContext.createGain();
+
+    panLFO.frequency.value = 0.07;
+    panLFOGain.gain.value = 0.75;
+
+    panLFO.connect(panLFOGain);
+    panLFOGain.connect(noisePan.pan);
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(noisePan);
+    noisePan.connect(masterGain);
+
+    noise.start();
+    filterLFO.start();
+    panLFO.start();
+
+    audioStarted = true;
+
+    document.getElementById("sound-status").textContent =
+      "MOVE TO TUNE THE FIELD · CLICK FOR SOUND";
+  }
+
+  // --------------------------------------------------
+  // CLICK SOUND: DESCENDING LASER
+  // --------------------------------------------------
+
+  function playLaser(x) {
+    if (!audioContext || !masterGain) return;
+
+    const now = audioContext.currentTime;
+
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    const pan = audioContext.createStereoPanner();
+
+    oscillator.type = "sawtooth";
+
+    // Fast high-pitched attack, descending to around 40 Hz.
+    oscillator.frequency.setValueAtTime(880, now);
+    oscillator.frequency.exponentialRampToValueAtTime(
+      40.5,
+      now + 1.35
+    );
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.16, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.7);
+
+    pan.pan.value = (x - 0.5) * 1.5;
+
+    oscillator.connect(gain);
+    gain.connect(pan);
+    pan.connect(masterGain);
+
+    oscillator.start(now);
+    oscillator.stop(now + 1.75);
+  }
+
+  // --------------------------------------------------
+  // CLICK SOUND: WATER DROPLET
+  // --------------------------------------------------
+
+  function playDroplet(x) {
+    if (!audioContext || !masterGain) return;
+
+    const now = audioContext.currentTime;
+
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    const pan = audioContext.createStereoPanner();
+
+    oscillator.type = "sine";
+
+    oscillator.frequency.setValueAtTime(680, now);
+    oscillator.frequency.exponentialRampToValueAtTime(
+      115,
+      now + 0.65
+    );
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 2.8);
+
+    pan.pan.value = (x - 0.5) * 1.5;
+
+    oscillator.connect(gain);
+    gain.connect(pan);
+    pan.connect(masterGain);
+
+    oscillator.start(now);
+    oscillator.stop(now + 2.85);
+  }
+
+  // --------------------------------------------------
+  // CLICK INTERACTION
+  // --------------------------------------------------
+
+  window.addEventListener("pointerdown", (event) => {
+    startAudio();
+
+    const x = event.clientX / window.innerWidth;
+    const y = 1.0 - event.clientY / window.innerHeight;
+
+    clickPosition.x = x;
+    clickPosition.y = y;
+
+    // Use the same relative time base as the shader.
+    rippleStart = (performance.now() - startTime) * 0.001;
+    rippleActive = 1;
+
+    playLaser(x);
+    playDroplet(x);
+  });
+
+  // --------------------------------------------------
+  // RENDER LOOP
+  // --------------------------------------------------
+
+  function render(now) {
+    const elapsed = (now - startTime) * 0.001;
+
+    // Smooth mouse movement.
+    mouse.x += (targetMouse.x - mouse.x) * 0.045;
+    mouse.y += (targetMouse.y - mouse.y) * 0.045;
+
+    // Stop the ripple after four seconds.
+    if (elapsed - rippleStart > 4.0) {
+      rippleActive = 0;
+    }
+
+    gl.uniform1f(uniforms.time, elapsed);
+
+    gl.uniform2f(
+      uniforms.mouse,
+      mouse.x,
+      mouse.y
+    );
+
+    gl.uniform2f(
+      uniforms.clickPosition,
+      clickPosition.x,
+      clickPosition.y
+    );
+
+    gl.uniform1f(
+      uniforms.rippleStart,
+      rippleStart
+    );
+
+    gl.uniform1f(
+      uniforms.rippleActive,
+      rippleActive
+    );
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    requestAnimationFrame(render);
+  }
 
   requestAnimationFrame(render);
-}
 
-requestAnimationFrame(render);
-
+})();
 </script>
+
 </body>
 </html>
