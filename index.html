@@ -108,9 +108,18 @@ void main() {
 
   float motion = speed;
 
-  // Mouse-controlled wave frequencies
-  float fx = 115.0 + mouse.x * 100.0;
-  float fy = 130.0 + mouse.y * 120.0;
+
+ // Centre is always the original density
+float centerX = 115.0;
+float centerY = 130.0;
+
+// Horizontal control:
+// Left opens the pattern, right tightens it
+float fx = centerX + (0.5 - mouse.x) * 100.0;
+
+// Vertical control:
+// Up increases density, down decreases it
+float fy = centerY + (mouse.y - 0.5) * 120.0;
 
   // Vertical resonance
   float vertical = p.x * fx
