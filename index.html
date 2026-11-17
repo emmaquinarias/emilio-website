@@ -68,15 +68,21 @@ float fbm(vec3 p){
   return v;
 }
 
+// Organic, continuously evolving monochrome field.
 void main(){
   vec2 uv=vUv;
   float t=uTime;
 
-  vec2 q=vec2((uv.x-.5)*(uResolution.x/uResolution.y)*2.0,(uv.y-.5)*2.0);
+  vec2 q=vec2(
+    (uv.x-.5)*(uResolution.x/uResolution.y)*2.0,
+    (uv.y-.5)*2.0
+  );
+
   vec2 m=(uMouse-.5)*2.0;
   float centre=1.0-smoothstep(.02,.9,length(m));
   float motion=clamp(uMotion,0.0,1.0);
 
+  // Moving attractor and swirling distortion.
   vec2 focus=vec2(m.x*.42,m.y*.34);
   vec2 d=q-focus;
   float r=length(d)+.0001;
@@ -92,6 +98,7 @@ void main(){
     fbm(vec3(q.yx*2.8+3.1,-t*.09))-.5
   )*(.34+centre*.12);
 
+  // Nested, irregular filaments.
   float nA=fbm(vec3(p*3.2,t*.075));
   float nB=fbm(vec3(p*7.0+5.2,-t*.11));
   float nC=fbm(vec3(p*15.0-2.7,t*.16));
@@ -105,20 +112,34 @@ void main(){
   float crossLines=1.0-smoothstep(.12,.58,crossBands);
   float weave=filaments*.72+crossLines*.28;
 
+  // Turbulence and fine grain.
   float turbulence=fbm(vec3(p*23.0,t*.24));
   float micro=noise3(vec3(p*92.0,t*.55));
-  float grain=fract(sin(dot(gl_FragCoord.xy+floor(t*18.0),vec2(12.9898,78.233)))*43758.5453);
-  float textureField=smoothstep(.24,.78,turbulence*.62+micro*.28+grain*.10);
+  float grain=fract(
+    sin(dot(gl_FragCoord.xy+floor(t*18.0),vec2(12.9898,78.233)))
+    *43758.5453
+  );
+  float textureField=smoothstep(
+    .24,.78,turbulence*.62+micro*.28+grain*.10
+  );
 
+  // Dark central void with bright organic structures around it.
   float innerVoid=smoothstep(.06,.48,r);
   float outerFade=1.0-smoothstep(1.0,1.65,r);
-  float density=clamp((weave*.48+textureField*.78)*innerVoid*outerFade,0.0,1.0);
+  float density=clamp(
+    (weave*.48+textureField*.78)*innerVoid*outerFade,
+    0.0,1.0
+  );
+
   float contrast=smoothstep(.22,.82,density);
   float shimmer=.82+.18*noise3(vec3(p*31.0,t*.32));
-  float flicker=1.0-centre*(.08+.16*uFlicker)*step(.72,noise3(vec3(p*8.0,t*1.8)));
-  float value=clamp(contrast*shimmer*flicker,0.0,1.0);
+  float flicker=1.0-centre*(.08+.16*uFlicker)
+    *step(.72,noise3(vec3(p*8.0,t*1.8)));
 
+  float value=clamp(contrast*shimmer*flicker,0.0,1.0);
   value=clamp(value+(grain-.5)*.10*outerFade,0.0,1.0);
+
+  // Click-triggered black/white inversion.
   value=mix(value,1.0-value,clamp(uInvert,0.0,1.0));
   gl_FragColor=vec4(vec3(value),1.0);
 }`;
@@ -134,6 +155,7 @@ function compile(type,source){
   }
   return s;
 }
+
 const vs=compile(gl.VERTEX_SHADER,vertexSource);
 const fs=compile(gl.FRAGMENT_SHADER,fragmentSource);
 if(!vs||!fs)return;
@@ -150,9 +172,14 @@ if(!gl.getProgramParameter(program,gl.LINK_STATUS)){
 }
 
 gl.useProgram(program);
+
 const quad=gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER,quad);
-gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+gl.bufferData(
+  gl.ARRAY_BUFFER,
+  new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),
+  gl.STATIC_DRAW
+);
 
 const aPosition=gl.getAttribLocation(program,"aPosition");
 gl.enableVertexAttribArray(aPosition);
@@ -167,10 +194,16 @@ const uPulse=uniform("uPulse");
 const uFlicker=uniform("uFlicker");
 const uInvert=uniform("uInvert");
 
-let mouseX=.5,mouseY=.5,targetX=.5,targetY=.5,motion=0,targetMotion=0;
+let mouseX=.5,mouseY=.5,targetX=.5,targetY=.5;
+let motion=0,targetMotion=0;
 let lastX=.5,lastY=.5,lastCrackle=0;
-let audioContext=null,master=null,audioStarted=false,crackleReverb=null;
+
+let audioContext=null;
+let master=null;
+let audioStarted=false;
+let crackleReverb=null;
 let audioPulse=0,audioFlicker=0;
+
 let invertStartedAt=-1;
 const invertDuration=3.2;
 
@@ -194,7 +227,8 @@ function makeNoise(ctx){
 }
 
 function distortionCurve(amount){
-  const n=44100,c=new Float32Array(n);
+  const n=44100;
+  const c=new Float32Array(n);
   for(let i=0;i<n;i++){
     const x=i*2/n-1;
     c[i]=(1+amount)*x/(1+amount*Math.abs(x));
@@ -205,23 +239,28 @@ function distortionCurve(amount){
 function createReverb(ctx){
   const length=Math.floor(ctx.sampleRate*1.8);
   const impulse=ctx.createBuffer(2,length,ctx.sampleRate);
+
   for(let ch=0;ch<2;ch++){
     const data=impulse.getChannelData(ch);
     for(let i=0;i<length;i++){
       data[i]=(Math.random()*2-1)*Math.pow(1-i/length,3.0);
     }
   }
+
   const convolver=ctx.createConvolver();
   convolver.buffer=impulse;
+
   const wet=ctx.createGain();
   wet.gain.value=.26;
   convolver.connect(wet);
   wet.connect(master);
+
   return convolver;
 }
 
 function startAudio(){
   if(audioStarted)return;
+
   const AC=window.AudioContext||window.webkitAudioContext;
   if(!AC)return;
 
@@ -239,48 +278,58 @@ function startAudio(){
   master.gain.value=.72;
   master.connect(compressor);
   compressor.connect(audioContext.destination);
+
   crackleReverb=createReverb(audioContext);
 
   const shaper=audioContext.createWaveShaper();
   shaper.curve=distortionCurve(4);
   shaper.oversample="2x";
 
+  // Deep bass.
   const bass=audioContext.createOscillator();
   const bassGain=audioContext.createGain();
   const bassFilter=audioContext.createBiquadFilter();
+
   bass.type="sine";
   bass.frequency.value=41.203;
   bassGain.gain.value=.085;
   bassFilter.type="lowpass";
   bassFilter.frequency.value=150;
+
   bass.connect(bassFilter);
   bassFilter.connect(bassGain);
   bassGain.connect(shaper);
   shaper.connect(master);
 
+  // Harmonic layer.
   const harmonic=audioContext.createOscillator();
   const harmonicGain=audioContext.createGain();
+
   harmonic.type="triangle";
   harmonic.frequency.value=82.406;
   harmonicGain.gain.value=.014;
   harmonic.connect(harmonicGain);
   harmonicGain.connect(shaper);
 
+  // Bass LFO.
   const bassLFO=audioContext.createOscillator();
   const bassLFOGain=audioContext.createGain();
+
   bassLFO.frequency.value=.075;
   bassLFOGain.gain.value=.025;
   bassLFO.connect(bassLFOGain);
   bassLFOGain.connect(bassGain.gain);
 
+  // Filter LFO.
   const filterLFO=audioContext.createOscillator();
   const filterLFOGain=audioContext.createGain();
+
   filterLFO.frequency.value=.13;
   filterLFOGain.gain.value=55;
   filterLFO.connect(filterLFOGain);
   filterLFOGain.connect(bassFilter.frequency);
 
-  // Stereo noise bed with slow frequency and panning modulation.
+  // Stereo noise bed.
   const noise=audioContext.createBufferSource();
   noise.buffer=makeNoise(audioContext);
   noise.loop=true;
@@ -296,6 +345,7 @@ function startAudio(){
   const noisePan=audioContext.createStereoPanner();
   const noiseLFO=audioContext.createOscillator();
   const noiseLFOGain=audioContext.createGain();
+
   noiseLFO.frequency.value=.09;
   noiseLFOGain.gain.value=250;
   noiseLFO.connect(noiseLFOGain);
@@ -303,6 +353,7 @@ function startAudio(){
 
   const panLFO=audioContext.createOscillator();
   const panGain=audioContext.createGain();
+
   panLFO.frequency.value=.065;
   panGain.gain.value=.72;
   panLFO.connect(panGain);
@@ -313,6 +364,7 @@ function startAudio(){
   noiseGain.connect(noisePan);
   noisePan.connect(master);
 
+  // High-frequency noise.
   const highNoise=audioContext.createBufferSource();
   highNoise.buffer=makeNoise(audioContext);
   highNoise.loop=true;
@@ -323,13 +375,15 @@ function startAudio(){
 
   const highGain=audioContext.createGain();
   highGain.gain.value=.007;
+
   highNoise.connect(highFilter);
   highFilter.connect(highGain);
   highGain.connect(master);
 
-  // LFO pulse for visual modulation.
+  // Visual pulse LFO.
   const pulseLFO=audioContext.createOscillator();
   const pulseGain=audioContext.createGain();
+
   pulseLFO.frequency.value=1.7;
   pulseGain.gain.value=.5;
   pulseLFO.connect(pulseGain);
@@ -337,6 +391,7 @@ function startAudio(){
   const pulseAnalyser=audioContext.createAnalyser();
   pulseAnalyser.fftSize=64;
   pulseGain.connect(pulseAnalyser);
+
   window.__visualPulseLFO=pulseLFO;
 
   bass.start();
@@ -443,6 +498,7 @@ function triggerCrackle(x,y,intensity){
   source.stop(now+.15);
 }
 
+// Mouse movement triggers clusters of simultaneous crackles.
 addEventListener("pointermove",e=>{
   targetX=e.clientX/innerWidth;
   targetY=1.0-e.clientY/innerHeight;
@@ -450,11 +506,11 @@ addEventListener("pointermove",e=>{
   const dx=targetX-lastX;
   const dy=targetY-lastY;
   const distance=Math.sqrt(dx*dx+dy*dy);
+
   targetMotion=Math.min(1.0,distance*16.0);
   const now=performance.now();
 
   if(audioStarted&&distance>.0018&&now-lastCrackle>65){
-    // Five to eight crackles fire together for each mouse movement.
     const grains=5+Math.floor(Math.min(1,targetMotion)*3);
 
     for(let i=0;i<grains;i++){
@@ -465,6 +521,7 @@ addEventListener("pointermove",e=>{
         Math.min(1,targetMotion*.85+.25)
       );
     }
+
     lastCrackle=now;
   }
 
@@ -472,6 +529,7 @@ addEventListener("pointermove",e=>{
   lastY=targetY;
 });
 
+// Click starts the sound sweep and the color reversal.
 addEventListener("pointerdown",e=>{
   startAudio();
   playSweep(e.clientX/innerWidth);
@@ -491,9 +549,15 @@ function render(now){
   motion+=(targetMotion-motion)*.12;
   targetMotion*=.91;
 
-  const centre=1.0-Math.min(1.0,Math.hypot((mouseX-.5)*2,(mouseY-.5)*2)/.72);
+  const centre=1.0-Math.min(
+    1.0,
+    Math.hypot((mouseX-.5)*2,(mouseY-.5)*2)/.72
+  );
+
   audioPulse=.5+.5*Math.sin(t*10.68);
-  audioFlicker=audioStarted?(.5+.5*Math.sin(t*17.3+Math.sin(t*2.1))):0.0;
+  audioFlicker=audioStarted
+    ?(.5+.5*Math.sin(t*17.3+Math.sin(t*2.1)))
+    :0.0;
 
   gl.useProgram(program);
   gl.uniform1f(uTime,t);
@@ -502,13 +566,25 @@ function render(now){
   gl.uniform1f(uPulse,audioPulse*centre);
   gl.uniform1f(uFlicker,audioFlicker*centre);
 
-  // Inversion fades back to normal over the 3.2-second sound sweep.
-  const invertAmount=invertStartedAt<0
-    ?0
-    :Math.max(0,1-(now-invertStartedAt)/(invertDuration*1000));
+  // Rapid, irregular black-and-white flicker during the 3.2-second decay.
+  const invertProgress=invertStartedAt<0
+    ?1
+    :Math.min(1,(now-invertStartedAt)/(invertDuration*1000));
+
+  const invertEnvelope=invertStartedAt<0?0:1-invertProgress;
+  const flickerSpeed=18.0+invertProgress*72.0;
+
+  const flickerA=.5+.5*Math.sin(now*.001*flickerSpeed*6.28318);
+  const flickerB=.5+.5*Math.sin(
+    now*.001*flickerSpeed*10.73+Math.sin(now*.001*31.0)*2.2
+  );
+
+  const flickerGate=(flickerA>.34?1.0:0.0)*.55+flickerB*.45;
+  const invertAmount=invertEnvelope*(.22+.78*flickerGate);
 
   gl.uniform1f(uInvert,invertAmount);
   gl.drawArrays(gl.TRIANGLES,0,6);
+
   requestAnimationFrame(render);
 }
 
