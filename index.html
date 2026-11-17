@@ -62,7 +62,11 @@ const gl = canvas.getContext("webgl", {
   antialias: true,
   powerPreference: "high-performance"
 });
+const derivatives = gl.getExtension("OES_standard_derivatives");
 
+if (!derivatives) {
+  console.error("Standard derivatives extension unavailable");
+}
 if (!gl) {
   throw new Error("WebGL is not supported");
 }
