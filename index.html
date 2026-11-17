@@ -42,6 +42,7 @@ uniform float uTime;
 uniform float uMotion;
 uniform float uPulse;
 uniform float uFlicker;
+uniform float uInvert;
 
 float hash(vec3 p){
   p=fract(p*.3183099+vec3(.1));
@@ -71,13 +72,11 @@ void main(){
   vec2 uv=vUv;
   float t=uTime;
 
-  // Wide, softly folded field with a mirrored vertical structure.
   vec2 q=vec2((uv.x-.5)*(uResolution.x/uResolution.y)*2.0,(uv.y-.5)*2.0);
   vec2 m=(uMouse-.5)*2.0;
   float centre=1.0-smoothstep(.02,.9,length(m));
   float motion=clamp(uMotion,0.0,1.0);
 
-  // The dark centre is a moving attractor; the surrounding field curls around it.
   vec2 focus=vec2(m.x*.42,m.y*.34);
   vec2 d=q-focus;
   float r=length(d)+.0001;
@@ -87,31 +86,30 @@ void main(){
   float warpPower=.16+centre*.22+motion*.08;
 
   vec2 p=q;
-  p += flow*warpPower*sin(r*7.0-t*.22);
-  p += vec2(
-    fbm(vec3(q*2.4,t*.10))-0.5,
-    fbm(vec3(q.yx*2.8+3.1,-t*.09))-0.5
+  p+=flow*warpPower*sin(r*7.0-t*.22);
+  p+=vec2(
+    fbm(vec3(q*2.4,t*.10))-.5,
+    fbm(vec3(q.yx*2.8+3.1,-t*.09))-.5
   )*(.34+centre*.12);
 
-  // Fine, nested waves form thousands of irregular, continuous filaments.
   float nA=fbm(vec3(p*3.2,t*.075));
   float nB=fbm(vec3(p*7.0+5.2,-t*.11));
   float nC=fbm(vec3(p*15.0-2.7,t*.16));
-  float angleField=a + r*2.8 + nA*2.4 + nB*.85;
-  float radialField=r*13.0 + nA*5.5 + nB*2.0 + sin(a*5.0+t*.08)*.8;
-  float bands=abs(sin(angleField*17.0 + sin(radialField*.42)*2.1));
+
+  float angleField=a+r*2.8+nA*2.4+nB*.85;
+  float radialField=r*13.0+nA*5.5+nB*2.0+sin(a*5.0+t*.08)*.8;
+
+  float bands=abs(sin(angleField*17.0+sin(radialField*.42)*2.1));
   float filaments=1.0-smoothstep(.10,.48,bands);
   float crossBands=abs(sin(radialField*2.1+nC*3.0));
   float crossLines=1.0-smoothstep(.12,.58,crossBands);
   float weave=filaments*.72+crossLines*.28;
 
-  // Turbulent grain breaks the lines into a soft, granular material.
   float turbulence=fbm(vec3(p*23.0,t*.24));
   float micro=noise3(vec3(p*92.0,t*.55));
   float grain=fract(sin(dot(gl_FragCoord.xy+floor(t*18.0),vec2(12.9898,78.233)))*43758.5453);
   float textureField=smoothstep(.24,.78,turbulence*.62+micro*.28+grain*.10);
 
-  // Keep a deep central void and let the bright texture gather around it.
   float innerVoid=smoothstep(.06,.48,r);
   float outerFade=1.0-smoothstep(1.0,1.65,r);
   float density=clamp((weave*.48+textureField*.78)*innerVoid*outerFade,0.0,1.0);
@@ -120,8 +118,8 @@ void main(){
   float flicker=1.0-centre*(.08+.16*uFlicker)*step(.72,noise3(vec3(p*8.0,t*1.8)));
   float value=clamp(contrast*shimmer*flicker,0.0,1.0);
 
-  // Very fine monochrome grain, never a colored overlay.
   value=clamp(value+(grain-.5)*.10*outerFade,0.0,1.0);
+  value=mix(value,1.0-value,clamp(uInvert,0.0,1.0));
   gl_FragColor=vec4(vec3(value),1.0);
 }`;
 
@@ -139,29 +137,42 @@ function compile(type,source){
 const vs=compile(gl.VERTEX_SHADER,vertexSource);
 const fs=compile(gl.FRAGMENT_SHADER,fragmentSource);
 if(!vs||!fs)return;
+
 const program=gl.createProgram();
-gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);
+gl.attachShader(program,vs);
+gl.attachShader(program,fs);
+gl.linkProgram(program);
+
 if(!gl.getProgramParameter(program,gl.LINK_STATUS)){
   console.error(gl.getProgramInfoLog(program));
   document.getElementById("hint").textContent="PROGRAM LINK ERROR";
   return;
 }
+
 gl.useProgram(program);
 const quad=gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER,quad);
 gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+
 const aPosition=gl.getAttribLocation(program,"aPosition");
 gl.enableVertexAttribArray(aPosition);
 gl.vertexAttribPointer(aPosition,2,gl.FLOAT,false,0,0);
 
 const uniform=name=>gl.getUniformLocation(program,name);
-const uResolution=uniform("uResolution"),uMouse=uniform("uMouse"),uTime=uniform("uTime");
-const uMotion=uniform("uMotion"),uPulse=uniform("uPulse"),uFlicker=uniform("uFlicker");
+const uResolution=uniform("uResolution");
+const uMouse=uniform("uMouse");
+const uTime=uniform("uTime");
+const uMotion=uniform("uMotion");
+const uPulse=uniform("uPulse");
+const uFlicker=uniform("uFlicker");
+const uInvert=uniform("uInvert");
 
 let mouseX=.5,mouseY=.5,targetX=.5,targetY=.5,motion=0,targetMotion=0;
 let lastX=.5,lastY=.5,lastCrackle=0;
 let audioContext=null,master=null,audioStarted=false,crackleReverb=null;
 let audioPulse=0,audioFlicker=0;
+let invertStartedAt=-1;
+const invertDuration=3.2;
 
 function resize(){
   const dpr=Math.min(window.devicePixelRatio||1,1.5);
@@ -171,7 +182,8 @@ function resize(){
   gl.useProgram(program);
   gl.uniform2f(uResolution,canvas.width,canvas.height);
 }
-addEventListener("resize",resize);resize();
+addEventListener("resize",resize);
+resize();
 
 function makeNoise(ctx){
   const length=ctx.sampleRate*4;
@@ -180,159 +192,326 @@ function makeNoise(ctx){
   for(let i=0;i<length;i++)data[i]=Math.random()*2-1;
   return buffer;
 }
+
 function distortionCurve(amount){
   const n=44100,c=new Float32Array(n);
-  for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=(1+amount)*x/(1+amount*Math.abs(x));}
+  for(let i=0;i<n;i++){
+    const x=i*2/n-1;
+    c[i]=(1+amount)*x/(1+amount*Math.abs(x));
+  }
   return c;
 }
+
 function createReverb(ctx){
   const length=Math.floor(ctx.sampleRate*1.8);
   const impulse=ctx.createBuffer(2,length,ctx.sampleRate);
   for(let ch=0;ch<2;ch++){
     const data=impulse.getChannelData(ch);
-    for(let i=0;i<length;i++)data[i]=(Math.random()*2-1)*Math.pow(1-i/length,3.0);
+    for(let i=0;i<length;i++){
+      data[i]=(Math.random()*2-1)*Math.pow(1-i/length,3.0);
+    }
   }
-  const convolver=ctx.createConvolver();convolver.buffer=impulse;
-  const wet=ctx.createGain();wet.gain.value=.26;
-  convolver.connect(wet);wet.connect(master);
+  const convolver=ctx.createConvolver();
+  convolver.buffer=impulse;
+  const wet=ctx.createGain();
+  wet.gain.value=.26;
+  convolver.connect(wet);
+  wet.connect(master);
   return convolver;
 }
+
 function startAudio(){
   if(audioStarted)return;
   const AC=window.AudioContext||window.webkitAudioContext;
   if(!AC)return;
+
   audioContext=new AC();
   if(audioContext.state==="suspended")audioContext.resume();
+
   const compressor=audioContext.createDynamicsCompressor();
-  compressor.threshold.value=-20;compressor.knee.value=12;compressor.ratio.value=4;
-  compressor.attack.value=.008;compressor.release.value=.22;
-  master=audioContext.createGain();master.gain.value=.72;
-  master.connect(compressor);compressor.connect(audioContext.destination);
+  compressor.threshold.value=-20;
+  compressor.knee.value=12;
+  compressor.ratio.value=4;
+  compressor.attack.value=.008;
+  compressor.release.value=.22;
+
+  master=audioContext.createGain();
+  master.gain.value=.72;
+  master.connect(compressor);
+  compressor.connect(audioContext.destination);
   crackleReverb=createReverb(audioContext);
 
-  const shaper=audioContext.createWaveShaper();shaper.curve=distortionCurve(4);shaper.oversample="2x";
-  const bass=audioContext.createOscillator(),bassGain=audioContext.createGain(),bassFilter=audioContext.createBiquadFilter();
-  bass.type="sine";bass.frequency.value=41.203;bassGain.gain.value=.085;
-  bassFilter.type="lowpass";bassFilter.frequency.value=150;
-  bass.connect(bassFilter);bassFilter.connect(bassGain);bassGain.connect(shaper);shaper.connect(master);
+  const shaper=audioContext.createWaveShaper();
+  shaper.curve=distortionCurve(4);
+  shaper.oversample="2x";
 
-  const harmonic=audioContext.createOscillator(),harmonicGain=audioContext.createGain();
-  harmonic.type="triangle";harmonic.frequency.value=82.406;harmonicGain.gain.value=.014;
-  harmonic.connect(harmonicGain);harmonicGain.connect(shaper);
+  const bass=audioContext.createOscillator();
+  const bassGain=audioContext.createGain();
+  const bassFilter=audioContext.createBiquadFilter();
+  bass.type="sine";
+  bass.frequency.value=41.203;
+  bassGain.gain.value=.085;
+  bassFilter.type="lowpass";
+  bassFilter.frequency.value=150;
+  bass.connect(bassFilter);
+  bassFilter.connect(bassGain);
+  bassGain.connect(shaper);
+  shaper.connect(master);
 
-  const bassLFO=audioContext.createOscillator(),bassLFOGain=audioContext.createGain();
-  bassLFO.frequency.value=.075;bassLFOGain.gain.value=.025;
-  bassLFO.connect(bassLFOGain);bassLFOGain.connect(bassGain.gain);
+  const harmonic=audioContext.createOscillator();
+  const harmonicGain=audioContext.createGain();
+  harmonic.type="triangle";
+  harmonic.frequency.value=82.406;
+  harmonicGain.gain.value=.014;
+  harmonic.connect(harmonicGain);
+  harmonicGain.connect(shaper);
 
-  const filterLFO=audioContext.createOscillator(),filterLFOGain=audioContext.createGain();
-  filterLFO.frequency.value=.13;filterLFOGain.gain.value=55;
-  filterLFO.connect(filterLFOGain);filterLFOGain.connect(bassFilter.frequency);
+  const bassLFO=audioContext.createOscillator();
+  const bassLFOGain=audioContext.createGain();
+  bassLFO.frequency.value=.075;
+  bassLFOGain.gain.value=.025;
+  bassLFO.connect(bassLFOGain);
+  bassLFOGain.connect(bassGain.gain);
 
-  // Stereo noise bed, moving left and right under an LFO.
-  const noise=audioContext.createBufferSource();noise.buffer=makeNoise(audioContext);noise.loop=true;
-  const noiseFilter=audioContext.createBiquadFilter();noiseFilter.type="bandpass";noiseFilter.frequency.value=420;noiseFilter.Q.value=.6;
-  const noiseGain=audioContext.createGain();noiseGain.gain.value=.032;
+  const filterLFO=audioContext.createOscillator();
+  const filterLFOGain=audioContext.createGain();
+  filterLFO.frequency.value=.13;
+  filterLFOGain.gain.value=55;
+  filterLFO.connect(filterLFOGain);
+  filterLFOGain.connect(bassFilter.frequency);
+
+  // Stereo noise bed with slow frequency and panning modulation.
+  const noise=audioContext.createBufferSource();
+  noise.buffer=makeNoise(audioContext);
+  noise.loop=true;
+
+  const noiseFilter=audioContext.createBiquadFilter();
+  noiseFilter.type="bandpass";
+  noiseFilter.frequency.value=420;
+  noiseFilter.Q.value=.6;
+
+  const noiseGain=audioContext.createGain();
+  noiseGain.gain.value=.032;
+
   const noisePan=audioContext.createStereoPanner();
-  const noiseLFO=audioContext.createOscillator(),noiseLFOGain=audioContext.createGain();
-  noiseLFO.frequency.value=.09;noiseLFOGain.gain.value=250;
-  noiseLFO.connect(noiseLFOGain);noiseLFOGain.connect(noiseFilter.frequency);
-  const panLFO=audioContext.createOscillator(),panGain=audioContext.createGain();
-  panLFO.frequency.value=.065;panGain.gain.value=.72;
-  panLFO.connect(panGain);panGain.connect(noisePan.pan);
-  noise.connect(noiseFilter);noiseFilter.connect(noiseGain);noiseGain.connect(noisePan);noisePan.connect(master);
+  const noiseLFO=audioContext.createOscillator();
+  const noiseLFOGain=audioContext.createGain();
+  noiseLFO.frequency.value=.09;
+  noiseLFOGain.gain.value=250;
+  noiseLFO.connect(noiseLFOGain);
+  noiseLFOGain.connect(noiseFilter.frequency);
 
-  const highNoise=audioContext.createBufferSource();highNoise.buffer=makeNoise(audioContext);highNoise.loop=true;
-  const highFilter=audioContext.createBiquadFilter();highFilter.type="highpass";highFilter.frequency.value=1900;
-  const highGain=audioContext.createGain();highGain.gain.value=.007;
-  highNoise.connect(highFilter);highFilter.connect(highGain);highGain.connect(master);
+  const panLFO=audioContext.createOscillator();
+  const panGain=audioContext.createGain();
+  panLFO.frequency.value=.065;
+  panGain.gain.value=.72;
+  panLFO.connect(panGain);
+  panGain.connect(noisePan.pan);
 
-  // LFOs also modulate the visual black/white pulse.
-  const pulseLFO=audioContext.createOscillator(),pulseGain=audioContext.createGain();
-  pulseLFO.frequency.value=1.7;pulseGain.gain.value=.5;
+  noise.connect(noiseFilter);
+  noiseFilter.connect(noiseGain);
+  noiseGain.connect(noisePan);
+  noisePan.connect(master);
+
+  const highNoise=audioContext.createBufferSource();
+  highNoise.buffer=makeNoise(audioContext);
+  highNoise.loop=true;
+
+  const highFilter=audioContext.createBiquadFilter();
+  highFilter.type="highpass";
+  highFilter.frequency.value=1900;
+
+  const highGain=audioContext.createGain();
+  highGain.gain.value=.007;
+  highNoise.connect(highFilter);
+  highFilter.connect(highGain);
+  highGain.connect(master);
+
+  // LFO pulse for visual modulation.
+  const pulseLFO=audioContext.createOscillator();
+  const pulseGain=audioContext.createGain();
+  pulseLFO.frequency.value=1.7;
+  pulseGain.gain.value=.5;
   pulseLFO.connect(pulseGain);
-  const pulseAnalyser=audioContext.createAnalyser();pulseAnalyser.fftSize=64;
+
+  const pulseAnalyser=audioContext.createAnalyser();
+  pulseAnalyser.fftSize=64;
   pulseGain.connect(pulseAnalyser);
   window.__visualPulseLFO=pulseLFO;
 
-  bass.start();harmonic.start();bassLFO.start();filterLFO.start();
-  noise.start();noiseLFO.start();panLFO.start();highNoise.start();pulseLFO.start();
+  bass.start();
+  harmonic.start();
+  bassLFO.start();
+  filterLFO.start();
+  noise.start();
+  noiseLFO.start();
+  panLFO.start();
+  highNoise.start();
+  pulseLFO.start();
+
   audioStarted=true;
 }
+
 function playSweep(x){
   if(!audioContext||!master)return;
+
   const now=audioContext.currentTime;
-  const osc=audioContext.createOscillator(),sub=audioContext.createOscillator();
-  const gain=audioContext.createGain(),subGain=audioContext.createGain();
-  const filter=audioContext.createBiquadFilter(),pan=audioContext.createStereoPanner();
-  osc.type="triangle";osc.frequency.setValueAtTime(145,now);osc.frequency.exponentialRampToValueAtTime(31,now+2.4);
-  sub.type="sine";sub.frequency.setValueAtTime(72,now);sub.frequency.exponentialRampToValueAtTime(25,now+2.8);
-  filter.type="lowpass";filter.frequency.setValueAtTime(620,now);filter.frequency.exponentialRampToValueAtTime(95,now+2.5);
-  gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(.15,now+.07);gain.gain.exponentialRampToValueAtTime(.0001,now+3.2);
-  subGain.gain.setValueAtTime(.0001,now);subGain.gain.exponentialRampToValueAtTime(.08,now+.12);subGain.gain.exponentialRampToValueAtTime(.0001,now+3.0);
+  const osc=audioContext.createOscillator();
+  const sub=audioContext.createOscillator();
+  const gain=audioContext.createGain();
+  const subGain=audioContext.createGain();
+  const filter=audioContext.createBiquadFilter();
+  const pan=audioContext.createStereoPanner();
+
+  osc.type="triangle";
+  osc.frequency.setValueAtTime(145,now);
+  osc.frequency.exponentialRampToValueAtTime(31,now+2.4);
+
+  sub.type="sine";
+  sub.frequency.setValueAtTime(72,now);
+  sub.frequency.exponentialRampToValueAtTime(25,now+2.8);
+
+  filter.type="lowpass";
+  filter.frequency.setValueAtTime(620,now);
+  filter.frequency.exponentialRampToValueAtTime(95,now+2.5);
+
+  gain.gain.setValueAtTime(.0001,now);
+  gain.gain.exponentialRampToValueAtTime(.15,now+.07);
+  gain.gain.exponentialRampToValueAtTime(.0001,now+3.2);
+
+  subGain.gain.setValueAtTime(.0001,now);
+  subGain.gain.exponentialRampToValueAtTime(.08,now+.12);
+  subGain.gain.exponentialRampToValueAtTime(.0001,now+3.0);
+
   pan.pan.value=(x-.5)*1.7;
-  osc.connect(filter);filter.connect(gain);gain.connect(pan);pan.connect(master);
-  sub.connect(subGain);subGain.connect(pan);
-  osc.start(now);sub.start(now);osc.stop(now+3.25);sub.stop(now+3.05);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(pan);
+  pan.connect(master);
+
+  sub.connect(subGain);
+  subGain.connect(pan);
+
+  osc.start(now);
+  sub.start(now);
+  osc.stop(now+3.25);
+  sub.stop(now+3.05);
 }
+
 function triggerCrackle(x,y,intensity){
   if(!audioContext||!master||!crackleReverb)return;
-  const now=audioContext.currentTime,len=Math.floor(audioContext.sampleRate*.12);
-  const buffer=audioContext.createBuffer(1,len,audioContext.sampleRate),data=buffer.getChannelData(0);
+
+  const now=audioContext.currentTime;
+  const len=Math.floor(audioContext.sampleRate*.12);
+  const buffer=audioContext.createBuffer(1,len,audioContext.sampleRate);
+  const data=buffer.getChannelData(0);
+
   for(let i=0;i<len;i++){
     const envelope=Math.pow(1-i/len,3.1);
     data[i]=(Math.random()*2-1)*envelope*(Math.random()>.18?1:0);
   }
-  const source=audioContext.createBufferSource();source.buffer=buffer;
-  const band=audioContext.createBiquadFilter();band.type="bandpass";
-  band.frequency.value=700+y*4300;band.Q.value=1.5+intensity*4.0;
-  const high=audioContext.createBiquadFilter();high.type="highpass";high.frequency.value=650+y*1200;
+
+  const source=audioContext.createBufferSource();
+  source.buffer=buffer;
+
+  const band=audioContext.createBiquadFilter();
+  band.type="bandpass";
+  band.frequency.value=700+y*4300;
+  band.Q.value=1.5+intensity*4.0;
+
+  const high=audioContext.createBiquadFilter();
+  high.type="highpass";
+  high.frequency.value=650+y*1200;
+
   const env=audioContext.createGain();
   env.gain.setValueAtTime(.0001,now);
-  env.gain.exponentialRampToValueAtTime(.018+intensity*.075,now+.005);
-  env.gain.exponentialRampToValueAtTime(.0001,now+.14);
-  const pan=audioContext.createStereoPanner();pan.pan.value=(x-.5)*1.8;
-  source.connect(band);band.connect(high);high.connect(env);env.connect(pan);
-  pan.connect(master);pan.connect(crackleReverb);
-  source.start(now);source.stop(now+.15);
+  env.gain.exponentialRampToValueAtTime(.055+intensity*.16,now+.003);
+  env.gain.exponentialRampToValueAtTime(.0001,now+.19);
+
+  const pan=audioContext.createStereoPanner();
+  pan.pan.value=(x-.5)*1.8;
+
+  source.connect(band);
+  band.connect(high);
+  high.connect(env);
+  env.connect(pan);
+  pan.connect(master);
+  pan.connect(crackleReverb);
+
+  source.start(now);
+  source.stop(now+.15);
 }
+
 addEventListener("pointermove",e=>{
   targetX=e.clientX/innerWidth;
   targetY=1.0-e.clientY/innerHeight;
-  const dx=targetX-lastX,dy=targetY-lastY;
+
+  const dx=targetX-lastX;
+  const dy=targetY-lastY;
   const distance=Math.sqrt(dx*dx+dy*dy);
   targetMotion=Math.min(1.0,distance*16.0);
   const now=performance.now();
-  if(audioStarted&&distance>.0028&&now-lastCrackle>55){
-    triggerCrackle(targetX,targetY,targetMotion);
+
+  if(audioStarted&&distance>.0018&&now-lastCrackle>65){
+    // Five to eight crackles fire together for each mouse movement.
+    const grains=5+Math.floor(Math.min(1,targetMotion)*3);
+
+    for(let i=0;i<grains;i++){
+      const spread=(Math.random()-.5)*.16;
+      triggerCrackle(
+        Math.max(0,Math.min(1,targetX+spread)),
+        Math.max(0,Math.min(1,targetY+(Math.random()-.5)*.12)),
+        Math.min(1,targetMotion*.85+.25)
+      );
+    }
     lastCrackle=now;
   }
-  lastX=targetX;lastY=targetY;
+
+  lastX=targetX;
+  lastY=targetY;
 });
+
 addEventListener("pointerdown",e=>{
   startAudio();
   playSweep(e.clientX/innerWidth);
+  invertStartedAt=performance.now();
 });
+
 const startTime=performance.now();
 let lastFrame=startTime;
+
 function render(now){
-  const dt=Math.min((now-lastFrame)*.001,.05);lastFrame=now;
+  const dt=Math.min((now-lastFrame)*.001,.05);
+  lastFrame=now;
   const t=(now-startTime)*.001;
+
   mouseX+=(targetX-mouseX)*.055;
   mouseY+=(targetY-mouseY)*.055;
   motion+=(targetMotion-motion)*.12;
   targetMotion*=.91;
+
   const centre=1.0-Math.min(1.0,Math.hypot((mouseX-.5)*2,(mouseY-.5)*2)/.72);
   audioPulse=.5+.5*Math.sin(t*10.68);
   audioFlicker=audioStarted?(.5+.5*Math.sin(t*17.3+Math.sin(t*2.1))):0.0;
+
   gl.useProgram(program);
   gl.uniform1f(uTime,t);
   gl.uniform2f(uMouse,mouseX,mouseY);
   gl.uniform1f(uMotion,motion);
   gl.uniform1f(uPulse,audioPulse*centre);
   gl.uniform1f(uFlicker,audioFlicker*centre);
+
+  // Inversion fades back to normal over the 3.2-second sound sweep.
+  const invertAmount=invertStartedAt<0
+    ?0
+    :Math.max(0,1-(now-invertStartedAt)/(invertDuration*1000));
+
+  gl.uniform1f(uInvert,invertAmount);
   gl.drawArrays(gl.TRIANGLES,0,6);
   requestAnimationFrame(render);
 }
+
 requestAnimationFrame(render);
 })();
 </script>
