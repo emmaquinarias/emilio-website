@@ -7,32 +7,24 @@
 <title>EMILIO ARIAS</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-html,body {
-  width:100%; height:100%; overflow:hidden;
-  background:#000; cursor:crosshair;
-}
+html,body { width:100%; height:100%; overflow:hidden; background:#000; cursor:crosshair; }
 canvas { display:block; width:100%; height:100%; }
 #identity {
   position:fixed; top:0; right:0; z-index:10;
-  padding:15px 19px;
-  background:#fff; color:#000;
-  font:700 13px Helvetica,Arial,sans-serif;
-  letter-spacing:-.5px;
+  padding:15px 19px; background:#fff; color:#000;
+  font:700 13px Helvetica,Arial,sans-serif; letter-spacing:-.5px;
   user-select:none;
 }
 #status {
   position:fixed; left:20px; bottom:18px; z-index:10;
-  color:rgba(255,255,255,.45);
-  font:9px Helvetica,Arial,sans-serif;
-  letter-spacing:1.5px;
-  pointer-events:none;
+  color:rgba(255,255,255,.45); font:9px Helvetica,Arial,sans-serif;
+  letter-spacing:1.5px; pointer-events:none;
 }
 </style>
 </head>
 <body>
-
 <div id="identity">EMILIO ARIAS</div>
-<div id="status">MOVE TO SHAPE THE SURFACE · CLICK TO DISTURB</div>
+<div id="status">MOVE TO SHAPE THE FIELD · CLICK TO DISTURB</div>
 <canvas id="visual"></canvas>
 
 <script>
@@ -41,433 +33,297 @@ canvas { display:block; width:100%; height:100%; }
 
 const canvas = document.getElementById("visual");
 const gl = canvas.getContext("webgl", {
-  alpha:false,
-  antialias:true,
-  depth:true,
+  alpha:false, antialias:true, depth:false,
   powerPreference:"high-performance"
 });
 
 if (!gl) {
-  document.body.innerHTML =
-    "<p style='color:white;padding:30px'>WebGL is not supported.</p>";
+  document.getElementById("status").textContent = "WEBGL NOT AVAILABLE";
   return;
 }
 
 // --------------------------------------------------
-// MESH RESOLUTION
-// --------------------------------------------------
-
-// A single connected mesh. The grid is concentrated
-// around the cursor by changing vertex positions.
-// No extra lines are created by clicks.
-
-const COLS = 340;
-const ROWS = 240;
-const VERTEX_COUNT = (COLS + 1) * (ROWS + 1);
-
-const positions = new Float32Array(VERTEX_COUNT * 2);
-const indices = new Uint32Array(
-  ROWS * (COLS + 1) * 2 +
-  COLS * (ROWS + 1) * 2
-);
-
-let indexOffset = 0;
-
-for (let y=0; y<=ROWS; y++) {
-  for (let x=0; x<=COLS; x++) {
-    const i = y*(COLS+1)+x;
-
-    // Horizontal mesh edges.
-    if (x<COLS) {
-      indices[indexOffset++] = i;
-      indices[indexOffset++] = i+1;
-    }
-
-    // Vertical mesh edges.
-    if (y<ROWS) {
-      indices[indexOffset++] = i;
-      indices[indexOffset++] = i+COLS+1;
-    }
-  }
-}
-
-// --------------------------------------------------
-// VERTEX SHADER
+// FULL-SCREEN RAY-MARCHED FIELD
+// Adapted from the TouchDesigner field study.
 // --------------------------------------------------
 
 const vertexSource = `
-precision highp float;
-
-attribute vec2 gridPosition;
-
-uniform vec2 resolution;
-uniform float time;
-uniform vec2 mouse;
-uniform vec4 clickEvents[4];
-
-varying float surfaceDepth;
-
-float hash3(vec3 p) {
-  p = fract(p * 0.3183099 + vec3(0.1));
-  p *= 17.0;
-  return fract(p.x*p.y*p.z*(p.x+p.y+p.z));
-}
-
-float noise3(vec3 p) {
-  vec3 i=floor(p);
-  vec3 f=fract(p);
-  f=f*f*(3.0-2.0*f);
-
-  return mix(
-    mix(
-      mix(hash3(i),hash3(i+vec3(1,0,0)),f.x),
-      mix(hash3(i+vec3(0,1,0)),hash3(i+vec3(1,1,0)),f.x),
-      f.y
-    ),
-    mix(
-      mix(hash3(i+vec3(0,0,1)),hash3(i+vec3(1,0,1)),f.x),
-      mix(hash3(i+vec3(0,1,1)),hash3(i+vec3(1,1,1)),f.x),
-      f.y
-    ),
-    f.z
-  );
-}
-
-float fbm(vec3 p) {
-  float result=0.0;
-  float amplitude=0.5;
-
-  for(int i=0;i<5;i++) {
-    result += noise3(p)*amplitude;
-    p = p*2.03 + vec3(13.1,7.7,9.2);
-    amplitude *= 0.5;
-  }
-
-  return result;
-}
+attribute vec2 aPosition;
+varying vec2 vUV;
 
 void main() {
-  float t=time;
-
-  vec2 p=gridPosition;
-
-  // Aspect correction.
-  p.x *= resolution.x/resolution.y;
-
-  float radius=length(p);
-  float angle=atan(p.y,p.x);
-
-  // ------------------------------------------------
-  // LARGE DOME
-  // ------------------------------------------------
-
-  float domeRadius=length(vec2(p.x*0.78,p.y*1.1));
-
-  float dome=exp(-domeRadius*domeRadius*2.4);
-
-  // The dome is the base geometry.
-  float height=dome*0.30;
-
-  // ------------------------------------------------
-  // CENTRAL HORIZON
-  // ------------------------------------------------
-
-  float horizon =
-      sin(p.x*2.2+t*0.12)*0.009
-    + sin(p.x*5.0-t*0.2)*0.004;
-
-  float horizonDistance=abs(p.y-horizon);
-
-  float horizonInfluence=exp(-horizonDistance*13.0);
-
-  // ------------------------------------------------
-  // ANIMATED 3D NOISE DISPLACEMENT
-  // ------------------------------------------------
-
-  // Noise changes the geometry, not the pixel colour.
-  vec3 noisePosition=vec3(
-    p.x*3.2,
-    p.y*4.2,
-    t*0.10
-  );
-
-  float broadNoise=fbm(noisePosition);
-
-  float mediumNoise=fbm(
-    noisePosition*3.0+vec3(4.0,8.0,t*0.18)
-  );
-
-  float fineNoise=fbm(
-    noisePosition*9.0+vec3(12.0,3.0,t*0.3)
-  );
-
-  float surfaceNoise =
-      (broadNoise-0.5)*0.17
-    + (mediumNoise-0.5)*0.065
-    + (fineNoise-0.5)*0.018;
-
-  // More deformation near the horizon.
-  float horizonNoise=fbm(
-    vec3(p.x*13.0,p.y*28.0,t*0.5)
-  );
-
-  surfaceNoise +=
-    (horizonNoise-0.5)*0.09*horizonInfluence;
-
-  // ------------------------------------------------
-  // LFO MODULATION
-  // ------------------------------------------------
-
-  float xControl=(mouse.x-0.5)*2.0;
-  float yControl=(mouse.y-0.5)*2.0;
-
-  float slowLFO=sin(t*0.11+xControl*2.0);
-  float mediumLFO=sin(t*0.37-xControl*3.0+1.3);
-  float fastLFO=sin(t*1.3+xControl*5.0);
-  float microLFO=sin(t*4.0-xControl*7.0);
-
-  float modulation =
-      slowLFO*0.025
-    + mediumLFO*0.012
-    + fastLFO*0.004
-    + microLFO*0.0015;
-
-  // Mouse changes the actual geometry.
-  float mouseDeformation =
-    sin(p.y*8.0+t*0.3+xControl*3.0)*0.025
-    + sin(p.x*11.0-t*0.2+yControl*2.0)*0.018;
-
-  // ------------------------------------------------
-  // CLICK EVENTS: GEOMETRY IMPULSES
-  // ------------------------------------------------
-
-  float clickHeight=0.0;
-
-  for(int i=0;i<4;i++) {
-    vec4 e=clickEvents[i];
-
-    float age=e.z;
-    float active=e.w;
-
-    if(active>0.0 && age>=0.0 && age<4.5) {
-      vec2 origin=e.xy-0.5;
-      origin.x*=resolution.x/resolution.y;
-
-      vec2 delta=p-origin;
-      float d=length(delta);
-
-      float fade=exp(-age*0.9);
-
-      // A travelling displacement through the existing surface.
-      float wave=sin(d*42.0-age*13.0);
-
-      float envelope=exp(
-        -pow((d-age*0.28)*3.0,2.0)
-      );
-
-      clickHeight +=
-        wave*envelope*fade*0.11*active;
-    }
-  }
-
-  // ------------------------------------------------
-  // FINAL DISPLACED SURFACE
-  // ------------------------------------------------
-
-  height += surfaceNoise;
-  height += modulation;
-  height += mouseDeformation;
-  height += clickHeight;
-
-  // Horizon deformation.
-  height +=
-    sin(p.x*38.0+t*1.1)*
-    horizonInfluence*0.025;
-
-  // The dome and noise produce a single 3D fabric.
-  // The mesh lines follow its displaced geometry.
-
-  vec3 worldPosition=vec3(p.x,p.y+height*0.55,height);
-
-  // Perspective-like projection.
-  float cameraDepth=2.6-worldPosition.z*0.45;
-
-  vec2 projected=worldPosition.xy/cameraDepth;
-
-  float aspect=resolution.x/resolution.y;
-
-  projected.x/=aspect;
-  projected*=1.75;
-
-  gl_Position=vec4(projected,0.0,1.0);
-
-  surfaceDepth=height;
-}
-`;
-
-// --------------------------------------------------
-// FRAGMENT SHADER
-// --------------------------------------------------
+  vUV = aPosition * 0.5 + 0.5;
+  gl_Position = vec4(aPosition, 0.0, 1.0);
+}`;
 
 const fragmentSource = `
 precision highp float;
 
-varying float surfaceDepth;
+varying vec2 vUV;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform vec2 uMouse;
+
+// ------------------------------------------------
+// 3D MATHEMATICAL FIELD
+// ------------------------------------------------
+
+float field(vec3 p) {
+    float t = uTime * 0.12;
+    vec2 m = (uMouse - 0.5) * 2.0;
+
+    // Mouse-driven domain distortion.
+    p.xy += vec2(
+        sin(p.y * 1.4 + t + m.x * 2.0),
+        cos(p.x * 1.7 - t + m.y * 2.0)
+    ) * 0.22;
+
+    // Large-scale deformation.
+    p += 0.20 * vec3(
+        sin(p.y * 2.2 + t),
+        cos(p.z * 2.0 - t * 0.7),
+        sin(p.x * 2.4 + t * 0.8)
+    );
+
+    // Fine-scale deformation.
+    p += 0.075 * vec3(
+        sin(p.z * 5.0 + p.y * 2.0 - t),
+        cos(p.x * 4.5 + p.z * 2.0 + t),
+        sin(p.y * 5.0 - p.x * 2.0)
+    );
+
+    // Gyroid-like mathematical structure.
+    float g =
+        sin(p.x * 3.8) * cos(p.y * 3.8) +
+        sin(p.y * 3.8) * cos(p.z * 3.8) +
+        sin(p.z * 3.8) * cos(p.x * 3.8);
+
+    // Secondary interference.
+    float h =
+        sin(p.x * 7.0 + sin(p.z * 3.0)) *
+        cos(p.y * 7.0 + cos(p.x * 3.0)) +
+        sin(p.z * 7.2 + sin(p.y * 3.0));
+
+    return abs(g + h * 0.22);
+}
+
+// ------------------------------------------------
+// RAY MARCHING
+// ------------------------------------------------
+
+float traceField(vec3 ro, vec3 rd) {
+    float depth = 0.0;
+
+    for (int i = 0; i < 150; i++) {
+        vec3 p = ro + rd * depth;
+        float d = field(p);
+
+        if (d < 0.018) return depth;
+
+        depth += max(d * 0.075, 0.006);
+
+        if (depth > 18.0) break;
+    }
+
+    return -1.0;
+}
+
+// ------------------------------------------------
+// SURFACE NORMAL
+// ------------------------------------------------
+
+vec3 getNormal(vec3 p) {
+    float e = 0.002;
+
+    vec3 n = vec3(
+        field(p + vec3(e,0.0,0.0)) -
+        field(p - vec3(e,0.0,0.0)),
+
+        field(p + vec3(0.0,e,0.0)) -
+        field(p - vec3(0.0,e,0.0)),
+
+        field(p + vec3(0.0,0.0,e)) -
+        field(p - vec3(0.0,0.0,e))
+    );
+
+    return normalize(n);
+}
+
+// ------------------------------------------------
+// RENDER
+// ------------------------------------------------
 
 void main() {
-  // One white mesh line system.
-  // No dots, grain, particles or background noise.
+    vec2 uv = vUV;
+    vec2 screen = uv * 2.0 - 1.0;
 
-  gl_FragColor=vec4(1.0,1.0,1.0,1.0);
-}
-`;
+    screen.x *= uResolution.x / uResolution.y;
 
-function compileShader(type,source) {
-  const shader=gl.createShader(type);
-  gl.shaderSource(shader,source);
+    float t = uTime;
+
+    // Camera.
+    vec3 ro = vec3(0.0, 0.0, 5.2);
+
+    vec3 rd = normalize(vec3(
+        screen.x,
+        screen.y,
+        -1.65
+    ));
+
+    // Subtle camera movement.
+    rd.xy += vec2(
+        sin(t * 0.09) * 0.025,
+        cos(t * 0.07) * 0.018
+    );
+
+    rd = normalize(rd);
+
+    float hit = traceField(ro, rd);
+    float brightness = 0.0;
+
+    if (hit > 0.0) {
+        vec3 pos = ro + rd * hit;
+        vec3 normal = getNormal(pos);
+
+        vec3 lightDir = normalize(vec3(-0.5, 0.8, 0.7));
+
+        float diffuse = max(dot(normal, lightDir), 0.0);
+
+        float rim = pow(
+            1.0 - max(dot(normal, -rd), 0.0),
+            2.5
+        );
+
+        float lighting =
+            0.18 +
+            diffuse * 0.65 +
+            rim * 0.45;
+
+        // Thin surface boundaries.
+        float detail = field(pos);
+
+        float edge =
+            1.0 - smoothstep(0.006, 0.022, detail);
+
+        brightness = edge * lighting;
+
+        // Depth attenuation.
+        brightness *= exp(-hit * 0.035);
+    }
+
+    brightness = clamp(brightness, 0.0, 1.0);
+
+    gl_FragColor = vec4(vec3(brightness), 1.0);
+}`;
+
+// --------------------------------------------------
+// SHADER COMPILATION
+// --------------------------------------------------
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+
+  gl.shaderSource(shader, source);
   gl.compileShader(shader);
 
-  if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) {
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
     console.error(gl.getShaderInfoLog(shader));
+    document.getElementById("status").textContent =
+      "SHADER ERROR — OPEN CONSOLE";
     return null;
   }
 
   return shader;
 }
 
-const vs=compileShader(gl.VERTEX_SHADER,vertexSource);
-const fs=compileShader(gl.FRAGMENT_SHADER,fragmentSource);
+const vs = compile(gl.VERTEX_SHADER, vertexSource);
+const fs = compile(gl.FRAGMENT_SHADER, fragmentSource);
 
-if(!vs||!fs)return;
+if (!vs || !fs) return;
 
-const program=gl.createProgram();
-gl.attachShader(program,vs);
-gl.attachShader(program,fs);
+const program = gl.createProgram();
+
+gl.attachShader(program, vs);
+gl.attachShader(program, fs);
 gl.linkProgram(program);
 
-if(!gl.getProgramParameter(program,gl.LINK_STATUS)) {
+if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
   console.error(gl.getProgramInfoLog(program));
+  document.getElementById("status").textContent =
+    "PROGRAM LINK ERROR";
   return;
 }
 
 gl.useProgram(program);
 
 // --------------------------------------------------
-// GPU BUFFERS
+// FULL-SCREEN GEOMETRY
 // --------------------------------------------------
 
-const positionBuffer=gl.createBuffer();
+const buffer = gl.createBuffer();
 
-gl.bindBuffer(gl.ARRAY_BUFFER,positionBuffer);
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+
 gl.bufferData(
   gl.ARRAY_BUFFER,
-  positions.byteLength,
-  gl.DYNAMIC_DRAW
-);
-
-const gridLocation=gl.getAttribLocation(program,"gridPosition");
-
-gl.enableVertexAttribArray(gridLocation);
-gl.vertexAttribPointer(
-  gridLocation,2,gl.FLOAT,false,0,0
-);
-
-const indexBuffer=gl.createBuffer();
-gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,indexBuffer);
-gl.bufferData(
-  gl.ELEMENT_ARRAY_BUFFER,
-  indices,
+  new Float32Array([
+    -1,-1, 1,-1, -1,1,
+    -1,1, 1,-1, 1,1
+  ]),
   gl.STATIC_DRAW
 );
 
-const U=name=>gl.getUniformLocation(program,name);
+const aPosition = gl.getAttribLocation(program, "aPosition");
 
-const uResolution=U("resolution");
-const uTime=U("time");
-const uMouse=U("mouse");
-const uEvents=U("clickEvents[0]");
+gl.enableVertexAttribArray(aPosition);
 
-// --------------------------------------------------
-// ADAPTIVE MESH DENSITY
-// --------------------------------------------------
+gl.vertexAttribPointer(
+  aPosition, 2, gl.FLOAT, false, 0, 0
+);
 
-// The mesh remains connected, but its vertices are
-// concentrated around the cursor.
-//
-// This increases actual geometric resolution locally.
-
-function adaptiveCoordinate(q,center,strength) {
-  const k=strength;
-
-  const low=Math.tanh(k*(-1.0-center));
-  const high=Math.tanh(k*(1.0-center));
-  const value=Math.tanh(k*(q-center));
-
-  return 2.0*(value-low)/(high-low)-1.0;
-}
-
-let mouse={x:0.5,y:0.5};
-let targetMouse={x:0.5,y:0.5};
-
-function updateMesh() {
-  const centerX=(mouse.x-0.5)*2.0;
-  const centerY=(0.5-mouse.y)*2.0;
-
-  // Higher strength means more concentrated vertices.
-  const concentration=3.0;
-
-  let index=0;
-
-  for(let y=0;y<=ROWS;y++) {
-    const qy=(y/ROWS)*2.0-1.0;
-
-    const py=adaptiveCoordinate(
-      qy,centerY,concentration
-    );
-
-    for(let x=0;x<=COLS;x++) {
-      const qx=(x/COLS)*2.0-1.0;
-
-      const px=adaptiveCoordinate(
-        qx,centerX,concentration
-      );
-
-      positions[index++]=px;
-      positions[index++]=py;
-    }
-  }
-
-  gl.bindBuffer(gl.ARRAY_BUFFER,positionBuffer);
-  gl.bufferSubData(gl.ARRAY_BUFFER,0,positions);
-}
+const uResolution = gl.getUniformLocation(program, "uResolution");
+const uTime = gl.getUniformLocation(program, "uTime");
+const uMouse = gl.getUniformLocation(program, "uMouse");
 
 // --------------------------------------------------
-// RESOLUTION
+// MOUSE INTERACTION
 // --------------------------------------------------
+
+let mouseX = 0.5;
+let mouseY = 0.5;
+
+let targetX = 0.5;
+let targetY = 0.5;
 
 function resize() {
-  const dpr=Math.min(window.devicePixelRatio||1,2);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-  canvas.width=Math.floor(innerWidth*dpr);
-  canvas.height=Math.floor(innerHeight*dpr);
+  canvas.width = Math.floor(innerWidth * dpr);
+  canvas.height = Math.floor(innerHeight * dpr);
 
-  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+
+  gl.useProgram(program);
 
   gl.uniform2f(
-    uResolution,canvas.width,canvas.height
+    uResolution,
+    canvas.width,
+    canvas.height
   );
 }
 
-addEventListener("resize",resize);
+addEventListener("resize", resize);
 resize();
 
-addEventListener("pointermove",e=>{
-  targetMouse.x=e.clientX/innerWidth;
-  targetMouse.y=e.clientY/innerHeight;
+addEventListener("pointermove", e => {
+  targetX = e.clientX / innerWidth;
+  targetY = 1.0 - e.clientY / innerHeight;
 });
 
 // --------------------------------------------------
 // AUDIO: INDUSTRIAL IDM / EBM
+// Preserved from the previous website version.
 // --------------------------------------------------
 
 let audioContext=null;
@@ -689,72 +545,33 @@ function playSweep(x) {
   sub.stop(now+3.85);
 }
 
-// --------------------------------------------------
-// CLICK: DISPLACE EXISTING GEOMETRY
-// --------------------------------------------------
-
-const clickEvents=[];
-
-addEventListener("pointerdown",e=>{
+// Click starts the existing audio and sweep.
+addEventListener("pointerdown", e => {
   startAudio();
-
-  const x=e.clientX/innerWidth;
-  const y=1-e.clientY/innerHeight;
-
-  const elapsed=(performance.now()-startTime)*0.001;
-
-  clickEvents.push({x,y,time:elapsed});
-
-  while(clickEvents.length>4)clickEvents.shift();
-
-  playSweep(x);
+  playSweep(e.clientX / innerWidth);
 });
 
 // --------------------------------------------------
-// ANIMATION
+// ANIMATION LOOP
 // --------------------------------------------------
 
-const startTime=performance.now();
+const startTime = performance.now();
 
 function render(now) {
-  const t=(now-startTime)*0.001;
+  const t = (now - startTime) * 0.001;
 
-  mouse.x+=(targetMouse.x-mouse.x)*0.045;
-  mouse.y+=(targetMouse.y-mouse.y)*0.045;
+  mouseX += (targetX - mouseX) * 0.045;
+  mouseY += (targetY - mouseY) * 0.045;
 
-  updateMesh();
+  gl.useProgram(program);
 
-  gl.uniform1f(uTime,t);
-  gl.uniform2f(uMouse,mouse.x,mouse.y);
+  gl.uniform1f(uTime, t);
+  gl.uniform2f(uMouse, mouseX, mouseY);
 
-  const eventData=new Float32Array(16);
+  gl.clearColor(0, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
 
-  for(let i=0;i<4;i++) {
-    if(i<clickEvents.length) {
-      const e=clickEvents[i];
-      const age=t-e.time;
-
-      eventData[i*4]=e.x;
-      eventData[i*4+1]=e.y;
-      eventData[i*4+2]=age;
-      eventData[i*4+3]=age>=0&&age<4.5?1:0;
-    }
-  }
-
-  gl.uniform4fv(uEvents,eventData);
-
-  gl.clearColor(0,0,0,1);
-  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
-
-  gl.disable(gl.DEPTH_TEST);
-  gl.lineWidth(1.0);
-
-  gl.drawElements(
-    gl.LINES,
-    indices.length,
-    gl.UNSIGNED_INT,
-    0
-  );
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
 
   requestAnimationFrame(render);
 }
