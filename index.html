@@ -5,7 +5,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EMILIO ARIAS</title>
-
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 html,body {
@@ -18,336 +17,312 @@ canvas { display:block; width:100%; height:100%; }
   padding:15px 19px;
   background:#fff; color:#000;
   font:700 13px Helvetica,Arial,sans-serif;
-  letter-spacing:-.5px; user-select:none;
+  letter-spacing:-.5px;
+  user-select:none;
 }
 #status {
   position:fixed; left:20px; bottom:18px; z-index:10;
   color:rgba(255,255,255,.45);
   font:9px Helvetica,Arial,sans-serif;
-  letter-spacing:1.5px; pointer-events:none;
+  letter-spacing:1.5px;
+  pointer-events:none;
 }
 </style>
 </head>
-
 <body>
+
 <div id="identity">EMILIO ARIAS</div>
-<div id="status">MOVE TO DISTORT · CLICK TO DISRUPT</div>
+<div id="status">MOVE TO SHAPE THE SURFACE · CLICK TO DISTURB</div>
 <canvas id="visual"></canvas>
 
 <script>
 (() => {
+"use strict";
+
 const canvas = document.getElementById("visual");
 const gl = canvas.getContext("webgl", {
   alpha:false,
-  antialias:false,
+  antialias:true,
+  depth:true,
   powerPreference:"high-performance"
 });
 
-if (!gl || !gl.getExtension("OES_standard_derivatives")) {
+if (!gl) {
   document.body.innerHTML =
-    "<p style='color:white;padding:30px'>WebGL with standard derivatives is required.</p>";
+    "<p style='color:white;padding:30px'>WebGL is not supported.</p>";
   return;
 }
 
-const vertex = `
-attribute vec2 position;
-void main() {
-  gl_Position = vec4(position,0.0,1.0);
-}
-`;
+// --------------------------------------------------
+// MESH RESOLUTION
+// --------------------------------------------------
 
-const fragment = `
-#extension GL_OES_standard_derivatives : enable
+// A single connected mesh. The grid is concentrated
+// around the cursor by changing vertex positions.
+// No extra lines are created by clicks.
+
+const COLS = 340;
+const ROWS = 240;
+const VERTEX_COUNT = (COLS + 1) * (ROWS + 1);
+
+const positions = new Float32Array(VERTEX_COUNT * 2);
+const indices = new Uint32Array(
+  ROWS * (COLS + 1) * 2 +
+  COLS * (ROWS + 1) * 2
+);
+
+let indexOffset = 0;
+
+for (let y=0; y<=ROWS; y++) {
+  for (let x=0; x<=COLS; x++) {
+    const i = y*(COLS+1)+x;
+
+    // Horizontal mesh edges.
+    if (x<COLS) {
+      indices[indexOffset++] = i;
+      indices[indexOffset++] = i+1;
+    }
+
+    // Vertical mesh edges.
+    if (y<ROWS) {
+      indices[indexOffset++] = i;
+      indices[indexOffset++] = i+COLS+1;
+    }
+  }
+}
+
+// --------------------------------------------------
+// VERTEX SHADER
+// --------------------------------------------------
+
+const vertexSource = `
 precision highp float;
+
+attribute vec2 gridPosition;
 
 uniform vec2 resolution;
 uniform float time;
 uniform vec2 mouse;
-uniform vec4 events[4];
+uniform vec4 clickEvents[4];
 
-// Fine contour rendering.
-float drawContour(float field) {
-  float d = abs(fract(field + 0.5) - 0.5);
-  float w = max(fwidth(field), 0.00001);
-  return 1.0 - smoothstep(w * 0.28, w * 0.82, d);
+varying float surfaceDepth;
+
+float hash3(vec3 p) {
+  p = fract(p * 0.3183099 + vec3(0.1));
+  p *= 17.0;
+  return fract(p.x*p.y*p.z*(p.x+p.y+p.z));
 }
 
-float hash(vec2 p) {
-  p = fract(p * vec2(123.34,456.21));
-  p += dot(p,p + 45.32);
-  return fract(p.x*p.y);
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f*f*(3.0-2.0*f);
+float noise3(vec3 p) {
+  vec3 i=floor(p);
+  vec3 f=fract(p);
+  f=f*f*(3.0-2.0*f);
 
   return mix(
-    mix(hash(i),hash(i+vec2(1.0,0.0)),f.x),
-    mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),f.x),
-    f.y
+    mix(
+      mix(hash3(i),hash3(i+vec3(1,0,0)),f.x),
+      mix(hash3(i+vec3(0,1,0)),hash3(i+vec3(1,1,0)),f.x),
+      f.y
+    ),
+    mix(
+      mix(hash3(i+vec3(0,0,1)),hash3(i+vec3(1,0,1)),f.x),
+      mix(hash3(i+vec3(0,1,1)),hash3(i+vec3(1,1,1)),f.x),
+      f.y
+    ),
+    f.z
   );
 }
 
-float fbm(vec2 p) {
-  float value = 0.0;
-  float amplitude = 0.5;
+float fbm(vec3 p) {
+  float result=0.0;
+  float amplitude=0.5;
 
-  for (int i=0; i<4; i++) {
-    value += noise(p)*amplitude;
-    p = p*2.02 + vec2(17.1,9.2);
+  for(int i=0;i<5;i++) {
+    result += noise3(p)*amplitude;
+    p = p*2.03 + vec3(13.1,7.7,9.2);
     amplitude *= 0.5;
   }
-  return value;
+
+  return result;
 }
 
 void main() {
-  vec2 uv = gl_FragCoord.xy / resolution.xy;
+  float t=time;
 
-  vec2 p = uv - 0.5;
-  p.x *= resolution.x / resolution.y;
+  vec2 p=gridPosition;
 
-  float t = time;
+  // Aspect correction.
+  p.x *= resolution.x/resolution.y;
 
-  float mx = (mouse.x-0.5)*2.0;
-  float my = (mouse.y-0.5)*2.0;
-
-  // Independent phase modulators.
-  // These move the same field, not separate line layers.
-  float slowLFO = sin(t*0.11 + mx*2.0);
-  float midLFO = sin(t*0.37 - mx*3.1 + 1.3);
-  float fastLFO = sin(t*1.23 + mx*5.2);
-  float microLFO = sin(t*4.1 - mx*7.0);
-
-  float phaseMovement =
-      slowLFO*0.32
-    + midLFO*0.13
-    + fastLFO*0.045
-    + microLFO*0.012;
+  float radius=length(p);
+  float angle=atan(p.y,p.x);
 
   // ------------------------------------------------
-  // ONE LARGE DOME
+  // LARGE DOME
   // ------------------------------------------------
 
-  float domeRadius = length(vec2(p.x*0.85,p.y*1.15));
+  float domeRadius=length(vec2(p.x*0.78,p.y*1.1));
 
-  float dome = exp(-domeRadius*domeRadius*2.2);
+  float dome=exp(-domeRadius*domeRadius*2.4);
 
-  // The dome bends the same continuous field.
-  float domeDisplacement =
-    dome * (
-      0.075
-      + 0.018*sin(t*0.16)
-      + 0.012*slowLFO
-    );
+  // The dome is the base geometry.
+  float height=dome*0.30;
 
   // ------------------------------------------------
-  // HORIZONTAL HORIZON
+  // CENTRAL HORIZON
   // ------------------------------------------------
 
   float horizon =
-      sin(p.x*2.1+t*0.13)*0.012
-    + sin(p.x*5.7-t*0.24)*0.004
-    + slowLFO*0.009;
+      sin(p.x*2.2+t*0.12)*0.009
+    + sin(p.x*5.0-t*0.2)*0.004;
 
-  float horizonDistance = abs(p.y-horizon);
+  float horizonDistance=abs(p.y-horizon);
 
-  float horizonInfluence =
-    exp(-horizonDistance*15.0);
+  float horizonInfluence=exp(-horizonDistance*13.0);
 
   // ------------------------------------------------
-  // ONE CONTINUOUS WARPED COORDINATE FIELD
+  // ANIMATED 3D NOISE DISPLACEMENT
   // ------------------------------------------------
 
-  float n1 = fbm(p*vec2(8.0,13.0)+vec2(t*.13,-t*.10));
-  float n2 = fbm(p*vec2(31.0,38.0)+vec2(-t*.25,t*.21));
-  float n3 = fbm(p*vec2(83.0,96.0)+vec2(t*.65,-t*.52));
+  // Noise changes the geometry, not the pixel colour.
+  vec3 noisePosition=vec3(
+    p.x*3.2,
+    p.y*4.2,
+    t*0.10
+  );
 
-  float horizonChaos =
-    horizonInfluence *
-    (n1*.018+n2*.012+n3*.006);
+  float broadNoise=fbm(noisePosition);
 
-  float domeShape =
-    domeDisplacement * (0.65 + 0.35*cos(p.x*2.0));
+  float mediumNoise=fbm(
+    noisePosition*3.0+vec3(4.0,8.0,t*0.18)
+  );
 
-  // Mouse movement shifts the phase and the field's shape.
-  float horizontalWarp =
-      sin(p.y*8.0 + t*.16 + mx*2.0)*0.009
-    + sin(p.y*19.0 - t*.27 + mx*3.0)*0.003;
+  float fineNoise=fbm(
+    noisePosition*9.0+vec3(12.0,3.0,t*0.3)
+  );
 
-  float verticalWarp =
-      sin(p.x*6.0 - t*.12 + my*2.0)*0.008
-    + sin(p.x*17.0 + t*.23)*0.003;
+  float surfaceNoise =
+      (broadNoise-0.5)*0.17
+    + (mediumNoise-0.5)*0.065
+    + (fineNoise-0.5)*0.018;
 
-  vec2 fieldPosition = p;
+  // More deformation near the horizon.
+  float horizonNoise=fbm(
+    vec3(p.x*13.0,p.y*28.0,t*0.5)
+  );
 
-  fieldPosition.x += horizontalWarp;
-  fieldPosition.y += verticalWarp;
-  fieldPosition.y += domeShape;
-  fieldPosition.y += horizon;
-  fieldPosition.y += horizonChaos;
+  surfaceNoise +=
+    (horizonNoise-0.5)*0.09*horizonInfluence;
 
   // ------------------------------------------------
-  // CLICK EVENTS MODIFY THE EXISTING FIELD
-  // No new rings or separate line systems.
+  // LFO MODULATION
   // ------------------------------------------------
 
-  float clickDisplacement = 0.0;
-  float clickPhase = 0.0;
+  float xControl=(mouse.x-0.5)*2.0;
+  float yControl=(mouse.y-0.5)*2.0;
 
-  for (int i=0; i<4; i++) {
-    vec4 eventData = events[i];
+  float slowLFO=sin(t*0.11+xControl*2.0);
+  float mediumLFO=sin(t*0.37-xControl*3.0+1.3);
+  float fastLFO=sin(t*1.3+xControl*5.0);
+  float microLFO=sin(t*4.0-xControl*7.0);
 
-    float age = eventData.z;
-    float active = eventData.w;
+  float modulation =
+      slowLFO*0.025
+    + mediumLFO*0.012
+    + fastLFO*0.004
+    + microLFO*0.0015;
 
-    if (active > 0.0 && age >= 0.0 && age < 4.5) {
-      vec2 origin = eventData.xy;
+  // Mouse changes the actual geometry.
+  float mouseDeformation =
+    sin(p.y*8.0+t*0.3+xControl*3.0)*0.025
+    + sin(p.x*11.0-t*0.2+yControl*2.0)*0.018;
 
-      vec2 delta = uv-origin;
-      delta.x *= resolution.x/resolution.y;
+  // ------------------------------------------------
+  // CLICK EVENTS: GEOMETRY IMPULSES
+  // ------------------------------------------------
 
-      float distanceFromClick = length(delta);
-      float angle = atan(delta.y,delta.x);
+  float clickHeight=0.0;
 
-      float fade = exp(-age*.75);
+  for(int i=0;i<4;i++) {
+    vec4 e=clickEvents[i];
 
-      // Expanding displacement impulse.
-      float travellingWave =
-        distanceFromClick*31.0-age*10.0;
+    float age=e.z;
+    float active=e.w;
 
-      float waveEnvelope =
-        exp(-pow((distanceFromClick-age*.29)*3.0,2.0));
+    if(active>0.0 && age>=0.0 && age<4.5) {
+      vec2 origin=e.xy-0.5;
+      origin.x*=resolution.x/resolution.y;
 
-      float organicMotion =
-          sin(angle*5.0+age*1.4)*.4
-        + cos(angle*9.0-age*.9)*.2;
+      vec2 delta=p-origin;
+      float d=length(delta);
 
-      // Push the existing field sideways and vertically.
-      clickDisplacement +=
-        waveEnvelope*fade*active*
-        (0.025+0.025*organicMotion);
+      float fade=exp(-age*0.9);
 
-      // Phase modulation, not additional contours.
-      clickPhase +=
-        sin(travellingWave+organicMotion)*
-        waveEnvelope*fade*active*1.2;
+      // A travelling displacement through the existing surface.
+      float wave=sin(d*42.0-age*13.0);
+
+      float envelope=exp(
+        -pow((d-age*0.28)*3.0,2.0)
+      );
+
+      clickHeight +=
+        wave*envelope*fade*0.11*active;
     }
   }
 
-  fieldPosition += normalize(p+vec2(.0001)) *
-    clickDisplacement;
-
   // ------------------------------------------------
-  // SELF-INTERFERING HIGH-FREQUENCY FIELD
+  // FINAL DISPLACED SURFACE
   // ------------------------------------------------
 
-  // High spatial frequency: no oversized repeating waves.
-  float baseFrequency = 145.0;
+  height += surfaceNoise;
+  height += modulation;
+  height += mouseDeformation;
+  height += clickHeight;
 
-  // A single scalar field built from interacting directions.
-  // The resulting contours all belong to the same field.
-  float phaseX =
-    fieldPosition.x*baseFrequency
-    + sin(fieldPosition.y*baseFrequency*.91 + phaseMovement)*1.35
-    + sin(fieldPosition.y*baseFrequency*1.73 - phaseMovement*.7)*.52;
+  // Horizon deformation.
+  height +=
+    sin(p.x*38.0+t*1.1)*
+    horizonInfluence*0.025;
 
-  float phaseY =
-    fieldPosition.y*baseFrequency*1.07
-    + sin(fieldPosition.x*baseFrequency*.83 - phaseMovement*.8)*1.25
-    + cos(fieldPosition.x*baseFrequency*1.61 + phaseMovement)*.48;
+  // The dome and noise produce a single 3D fabric.
+  // The mesh lines follow its displaced geometry.
 
-  float diagonal =
-    (fieldPosition.x+fieldPosition.y)*baseFrequency*.73
-    + sin((fieldPosition.x-fieldPosition.y)*baseFrequency*.55)*.75;
+  vec3 worldPosition=vec3(p.x,p.y+height*0.55,height);
 
-  float diagonalB =
-    (fieldPosition.x-fieldPosition.y)*baseFrequency*.69
-    + cos((fieldPosition.x+fieldPosition.y)*baseFrequency*.61)*.7;
+  // Perspective-like projection.
+  float cameraDepth=2.6-worldPosition.z*0.45;
 
-  // Combine into ONE field. There are no separately rendered layers.
-  float interferenceField =
-      sin(phaseX)
-    + sin(phaseY)
-    + sin(diagonal)*.75
-    + sin(diagonalB)*.65;
+  vec2 projected=worldPosition.xy/cameraDepth;
 
-  // The dome and horizon alter the phase of the same field.
-  interferenceField += phaseMovement;
-  interferenceField += clickPhase;
-  interferenceField += horizonInfluence*n2*.9;
+  float aspect=resolution.x/resolution.y;
 
-  // Extract contours from the single interference field.
-  float linePattern = drawContour(interferenceField*3.4);
+  projected.x/=aspect;
+  projected*=1.75;
 
-  // Local cancellation: dark gaps form naturally within the field.
-  float cancellation = sin(interferenceField*1.17 + n1*.7);
-  float darkZones = smoothstep(-.12,.58,cancellation);
+  gl_Position=vec4(projected,0.0,1.0);
 
-  linePattern *= mix(.08,1.0,darkZones);
-
-  // A second modulation changes the contour visibility,
-  // not the number of line systems.
-  float densityVariation =
-    .78 + .22*sin(interferenceField*1.8 + n2*1.5);
-
-  linePattern *= densityVariation;
-
-  // ------------------------------------------------
-  // HORIZON FRAGMENTATION
-  // ------------------------------------------------
-
-  float horizonGrain =
-    hash(floor(gl_FragCoord.xy*.65)+floor(t*32.0));
-
-  float microNoise =
-    hash(floor(gl_FragCoord.xy*1.4)+floor(t*47.0));
-
-  float horizonFlicker =
-    step(.43,horizonGrain)*horizonInfluence;
-
-  float granularDisruption =
-    (horizonGrain*.65+microNoise*.35)
-    * horizonInfluence;
-
-  // Fragments the existing contours near the horizon.
-  float fragmentation =
-    smoothstep(.17,.83,n3);
-
-  linePattern *= mix(
-    1.0,
-    .28+fragmentation*.75,
-    horizonInfluence*.92
-  );
-
-  linePattern += granularDisruption*.20;
-  linePattern += horizonFlicker*.10;
-
-  // ------------------------------------------------
-  // WHOLE FIELD NOISE AND FLICKER
-  // ------------------------------------------------
-
-  float globalFlicker =
-      .90
-    + .045*sin(t*17.0)
-    + .025*sin(t*37.0)
-    + .018*sin(t*71.0);
-
-  float signalNoise =
-    hash(floor(gl_FragCoord.xy*.75)+floor(t*35.0));
-
-  linePattern += (signalNoise-.5)*.075;
-  linePattern *= globalFlicker;
-
-  // Pure monochrome, with strong black cancellation.
-  float intensity = clamp(linePattern,0.0,1.0);
-
-  gl_FragColor = vec4(vec3(intensity),1.0);
+  surfaceDepth=height;
 }
 `;
 
-function compile(type,source) {
+// --------------------------------------------------
+// FRAGMENT SHADER
+// --------------------------------------------------
+
+const fragmentSource = `
+precision highp float;
+
+varying float surfaceDepth;
+
+void main() {
+  // One white mesh line system.
+  // No dots, grain, particles or background noise.
+
+  gl_FragColor=vec4(1.0,1.0,1.0,1.0);
+}
+`;
+
+function compileShader(type,source) {
   const shader=gl.createShader(type);
   gl.shaderSource(shader,source);
   gl.compileShader(shader);
@@ -356,11 +331,13 @@ function compile(type,source) {
     console.error(gl.getShaderInfoLog(shader));
     return null;
   }
+
   return shader;
 }
 
-const vs=compile(gl.VERTEX_SHADER,vertex);
-const fs=compile(gl.FRAGMENT_SHADER,fragment);
+const vs=compileShader(gl.VERTEX_SHADER,vertexSource);
+const fs=compileShader(gl.FRAGMENT_SHADER,fragmentSource);
+
 if(!vs||!fs)return;
 
 const program=gl.createProgram();
@@ -375,51 +352,122 @@ if(!gl.getProgramParameter(program,gl.LINK_STATUS)) {
 
 gl.useProgram(program);
 
-const vertices=new Float32Array([
- -1,-1,1,-1,-1,1,
- -1,1,1,-1,1,1
-]);
+// --------------------------------------------------
+// GPU BUFFERS
+// --------------------------------------------------
 
-const buffer=gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
-gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW);
+const positionBuffer=gl.createBuffer();
 
-const position=gl.getAttribLocation(program,"position");
-gl.enableVertexAttribArray(position);
-gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
+gl.bindBuffer(gl.ARRAY_BUFFER,positionBuffer);
+gl.bufferData(
+  gl.ARRAY_BUFFER,
+  positions.byteLength,
+  gl.DYNAMIC_DRAW
+);
+
+const gridLocation=gl.getAttribLocation(program,"gridPosition");
+
+gl.enableVertexAttribArray(gridLocation);
+gl.vertexAttribPointer(
+  gridLocation,2,gl.FLOAT,false,0,0
+);
+
+const indexBuffer=gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,indexBuffer);
+gl.bufferData(
+  gl.ELEMENT_ARRAY_BUFFER,
+  indices,
+  gl.STATIC_DRAW
+);
 
 const U=name=>gl.getUniformLocation(program,name);
 
 const uResolution=U("resolution");
 const uTime=U("time");
 const uMouse=U("mouse");
-const uEvents=U("events[0]");
+const uEvents=U("clickEvents[0]");
 
-let start=performance.now();
+// --------------------------------------------------
+// ADAPTIVE MESH DENSITY
+// --------------------------------------------------
 
-let mouse={x:.5,y:.5};
-let target={x:.5,y:.5};
+// The mesh remains connected, but its vertices are
+// concentrated around the cursor.
+//
+// This increases actual geometric resolution locally.
 
-const clickEvents=[];
+function adaptiveCoordinate(q,center,strength) {
+  const k=strength;
+
+  const low=Math.tanh(k*(-1.0-center));
+  const high=Math.tanh(k*(1.0-center));
+  const value=Math.tanh(k*(q-center));
+
+  return 2.0*(value-low)/(high-low)-1.0;
+}
+
+let mouse={x:0.5,y:0.5};
+let targetMouse={x:0.5,y:0.5};
+
+function updateMesh() {
+  const centerX=(mouse.x-0.5)*2.0;
+  const centerY=(0.5-mouse.y)*2.0;
+
+  // Higher strength means more concentrated vertices.
+  const concentration=3.0;
+
+  let index=0;
+
+  for(let y=0;y<=ROWS;y++) {
+    const qy=(y/ROWS)*2.0-1.0;
+
+    const py=adaptiveCoordinate(
+      qy,centerY,concentration
+    );
+
+    for(let x=0;x<=COLS;x++) {
+      const qx=(x/COLS)*2.0-1.0;
+
+      const px=adaptiveCoordinate(
+        qx,centerX,concentration
+      );
+
+      positions[index++]=px;
+      positions[index++]=py;
+    }
+  }
+
+  gl.bindBuffer(gl.ARRAY_BUFFER,positionBuffer);
+  gl.bufferSubData(gl.ARRAY_BUFFER,0,positions);
+}
+
+// --------------------------------------------------
+// RESOLUTION
+// --------------------------------------------------
 
 function resize() {
   const dpr=Math.min(window.devicePixelRatio||1,2);
+
   canvas.width=Math.floor(innerWidth*dpr);
   canvas.height=Math.floor(innerHeight*dpr);
+
   gl.viewport(0,0,canvas.width,canvas.height);
-  gl.uniform2f(uResolution,canvas.width,canvas.height);
+
+  gl.uniform2f(
+    uResolution,canvas.width,canvas.height
+  );
 }
 
 addEventListener("resize",resize);
 resize();
 
 addEventListener("pointermove",e=>{
-  target.x=e.clientX/innerWidth;
-  target.y=1-e.clientY/innerHeight;
+  targetMouse.x=e.clientX/innerWidth;
+  targetMouse.y=e.clientY/innerHeight;
 });
 
 // --------------------------------------------------
-// INDUSTRIAL IDM / EBM AUDIO
+// AUDIO: INDUSTRIAL IDM / EBM
 // --------------------------------------------------
 
 let audioContext=null;
@@ -434,6 +482,7 @@ function makeNoise(ctx) {
   for(let i=0;i<length;i++) {
     data[i]=Math.random()*2-1;
   }
+
   return buffer;
 }
 
@@ -445,6 +494,7 @@ function distortionCurve(amount) {
     const x=i*2/samples-1;
     curve[i]=(1+amount)*x/(1+amount*Math.abs(x));
   }
+
   return curve;
 }
 
@@ -455,17 +505,18 @@ function startAudio() {
   if(!AC)return;
 
   audioContext=new AC();
+
   if(audioContext.state==="suspended")audioContext.resume();
 
   const compressor=audioContext.createDynamicsCompressor();
   compressor.threshold.value=-18;
   compressor.knee.value=12;
   compressor.ratio.value=5;
-  compressor.attack.value=.008;
-  compressor.release.value=.25;
+  compressor.attack.value=0.008;
+  compressor.release.value=0.25;
 
   master=audioContext.createGain();
-  master.gain.value=.8;
+  master.gain.value=0.8;
   master.connect(compressor);
   compressor.connect(audioContext.destination);
 
@@ -473,14 +524,14 @@ function startAudio() {
   shaper.curve=distortionCurve(5);
   shaper.oversample="4x";
 
-  // Main E1 drone.
+  // Continuous E1 sub-bass.
   const bass=audioContext.createOscillator();
   const bassGain=audioContext.createGain();
   const bassFilter=audioContext.createBiquadFilter();
 
   bass.type="sine";
   bass.frequency.value=41.203;
-  bassGain.gain.value=.105;
+  bassGain.gain.value=0.105;
 
   bassFilter.type="lowpass";
   bassFilter.frequency.value=160;
@@ -490,35 +541,36 @@ function startAudio() {
   bassGain.connect(shaper);
   shaper.connect(master);
 
-  // Low harmonic layer.
+  // Harmonic bass layer.
   const harmonic=audioContext.createOscillator();
   const harmonicGain=audioContext.createGain();
 
   harmonic.type="triangle";
   harmonic.frequency.value=82.406;
-  harmonicGain.gain.value=.018;
+  harmonicGain.gain.value=0.018;
 
   harmonic.connect(harmonicGain);
   harmonicGain.connect(shaper);
 
-  // Bass modulation.
+  // Bass LFO.
   const bassLFO=audioContext.createOscillator();
   const bassLFOGain=audioContext.createGain();
 
-  bassLFO.frequency.value=.075;
-  bassLFOGain.gain.value=.035;
+  bassLFO.frequency.value=0.075;
+  bassLFOGain.gain.value=0.035;
   bassLFO.connect(bassLFOGain);
   bassLFOGain.connect(bassGain.gain);
 
+  // Filter modulation.
   const filterLFO=audioContext.createOscillator();
   const filterLFOGain=audioContext.createGain();
 
-  filterLFO.frequency.value=.13;
+  filterLFO.frequency.value=0.13;
   filterLFOGain.gain.value=75;
   filterLFO.connect(filterLFOGain);
   filterLFOGain.connect(bassFilter.frequency);
 
-  // Industrial noise bed.
+  // Industrial noise layer.
   const noise=audioContext.createBufferSource();
   noise.buffer=makeNoise(audioContext);
   noise.loop=true;
@@ -526,26 +578,28 @@ function startAudio() {
   const noiseFilter=audioContext.createBiquadFilter();
   noiseFilter.type="bandpass";
   noiseFilter.frequency.value=420;
-  noiseFilter.Q.value=.55;
+  noiseFilter.Q.value=0.55;
 
   const noiseGain=audioContext.createGain();
-  noiseGain.gain.value=.045;
+  noiseGain.gain.value=0.045;
 
   const noisePan=audioContext.createStereoPanner();
 
   const noiseLFO=audioContext.createOscillator();
   const noiseLFOGain=audioContext.createGain();
 
-  noiseLFO.frequency.value=.09;
+  noiseLFO.frequency.value=0.09;
   noiseLFOGain.gain.value=280;
+
   noiseLFO.connect(noiseLFOGain);
   noiseLFOGain.connect(noiseFilter.frequency);
 
   const panLFO=audioContext.createOscillator();
   const panGain=audioContext.createGain();
 
-  panLFO.frequency.value=.065;
-  panGain.gain.value=.7;
+  panLFO.frequency.value=0.065;
+  panGain.gain.value=0.7;
+
   panLFO.connect(panGain);
   panGain.connect(noisePan.pan);
 
@@ -554,7 +608,7 @@ function startAudio() {
   noiseGain.connect(noisePan);
   noisePan.connect(master);
 
-  // High-frequency noise texture.
+  // High noise texture.
   const highNoise=audioContext.createBufferSource();
   highNoise.buffer=makeNoise(audioContext);
   highNoise.loop=true;
@@ -564,7 +618,7 @@ function startAudio() {
   highFilter.frequency.value=1800;
 
   const highGain=audioContext.createGain();
-  highGain.gain.value=.009;
+  highGain.gain.value=0.009;
 
   highNoise.connect(highFilter);
   highFilter.connect(highGain);
@@ -582,7 +636,7 @@ function startAudio() {
   audioStarted=true;
 }
 
-// Deep descending industrial sweep.
+// Deep descending sweep.
 function playSweep(x) {
   if(!audioContext||!master)return;
 
@@ -610,16 +664,16 @@ function playSweep(x) {
   filter.frequency.exponentialRampToValueAtTime(90,now+2.8);
   filter.Q.value=2.2;
 
-  gain.gain.setValueAtTime(.0001,now);
-  gain.gain.exponentialRampToValueAtTime(.23,now+.08);
-  gain.gain.setValueAtTime(.16,now+.5);
-  gain.gain.exponentialRampToValueAtTime(.0001,now+4.0);
+  gain.gain.setValueAtTime(0.0001,now);
+  gain.gain.exponentialRampToValueAtTime(0.23,now+0.08);
+  gain.gain.setValueAtTime(0.16,now+0.5);
+  gain.gain.exponentialRampToValueAtTime(0.0001,now+4.0);
 
-  subGain.gain.setValueAtTime(.0001,now);
-  subGain.gain.exponentialRampToValueAtTime(.12,now+.15);
-  subGain.gain.exponentialRampToValueAtTime(.0001,now+3.8);
+  subGain.gain.setValueAtTime(0.0001,now);
+  subGain.gain.exponentialRampToValueAtTime(0.12,now+0.15);
+  subGain.gain.exponentialRampToValueAtTime(0.0001,now+3.8);
 
-  pan.pan.value=(x-.5)*1.5;
+  pan.pan.value=(x-0.5)*1.5;
 
   osc.connect(filter);
   filter.connect(gain);
@@ -636,56 +690,77 @@ function playSweep(x) {
 }
 
 // --------------------------------------------------
-// CLICK: DISTORT THE EXISTING FIELD
+// CLICK: DISPLACE EXISTING GEOMETRY
 // --------------------------------------------------
+
+const clickEvents=[];
 
 addEventListener("pointerdown",e=>{
   startAudio();
 
   const x=e.clientX/innerWidth;
   const y=1-e.clientY/innerHeight;
-  const elapsed=(performance.now()-start)*.001;
+
+  const elapsed=(performance.now()-startTime)*0.001;
 
   clickEvents.push({x,y,time:elapsed});
+
   while(clickEvents.length>4)clickEvents.shift();
 
   playSweep(x);
 });
 
 // --------------------------------------------------
-// RENDER
+// ANIMATION
 // --------------------------------------------------
 
-function render(now) {
-  const t=(now-start)*.001;
+const startTime=performance.now();
 
-  mouse.x+=(target.x-mouse.x)*.035;
-  mouse.y+=(target.y-mouse.y)*.035;
+function render(now) {
+  const t=(now-startTime)*0.001;
+
+  mouse.x+=(targetMouse.x-mouse.x)*0.045;
+  mouse.y+=(targetMouse.y-mouse.y)*0.045;
+
+  updateMesh();
 
   gl.uniform1f(uTime,t);
   gl.uniform2f(uMouse,mouse.x,mouse.y);
 
-  const data=new Float32Array(16);
+  const eventData=new Float32Array(16);
 
   for(let i=0;i<4;i++) {
     if(i<clickEvents.length) {
       const e=clickEvents[i];
       const age=t-e.time;
 
-      data[i*4]=e.x;
-      data[i*4+1]=e.y;
-      data[i*4+2]=age;
-      data[i*4+3]=age>=0&&age<4.5?1:0;
+      eventData[i*4]=e.x;
+      eventData[i*4+1]=e.y;
+      eventData[i*4+2]=age;
+      eventData[i*4+3]=age>=0&&age<4.5?1:0;
     }
   }
 
-  gl.uniform4fv(uEvents,data);
-  gl.drawArrays(gl.TRIANGLES,0,6);
+  gl.uniform4fv(uEvents,eventData);
+
+  gl.clearColor(0,0,0,1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+
+  gl.disable(gl.DEPTH_TEST);
+  gl.lineWidth(1.0);
+
+  gl.drawElements(
+    gl.LINES,
+    indices.length,
+    gl.UNSIGNED_INT,
+    0
+  );
 
   requestAnimationFrame(render);
 }
 
 requestAnimationFrame(render);
+
 })();
 </script>
 </body>
