@@ -65,9 +65,10 @@ canvas {
 <script>
 (() => {
   const canvas = document.getElementById("visual");
+
   const gl = canvas.getContext("webgl", {
     alpha: false,
-    antialias: false,
+    antialias: true,
     powerPreference: "high-performance"
   });
 
@@ -82,6 +83,10 @@ canvas {
       "<p style='color:white;padding:30px'>Required WebGL extension unavailable.</p>";
     return;
   }
+
+  // --------------------------------------------------
+  // SHADERS
+  // --------------------------------------------------
 
   const vertexSource = `
     attribute vec2 position;
@@ -102,130 +107,146 @@ canvas {
     uniform float rippleStart;
     uniform float rippleActive;
 
-    float hash(vec2 p) {
-      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    // Draw a mathematically anti-aliased hairline contour.
+    // Width is based on screen-space derivatives.
+    float hairline(float value) {
+      float distanceToLine = abs(fract(value + 0.5) - 0.5);
+      float pixelWidth = max(fwidth(value), 0.00001);
+
+      return 1.0 - smoothstep(
+        pixelWidth * 0.35,
+        pixelWidth * 0.85,
+        distanceToLine
+      );
     }
 
     void main() {
       vec2 uv = gl_FragCoord.xy / resolution.xy;
 
-      // Centre the field and correct for screen aspect ratio.
       vec2 p = uv - 0.5;
       p.x *= resolution.x / resolution.y;
 
       float t = time;
 
-      // Mouse controls.
-      float mx = (mouse.x - 0.5) * 2.0;
-      float my = (mouse.y - 0.5) * 2.0;
+      // Mouse position.
+      vec2 m = mouse - 0.5;
+      m.x *= resolution.x / resolution.y;
 
-      float density = 1.0 + my * 0.48;
-      float scale = 1.0 + mx * 0.42;
+      float mouseDistance = length(p - m);
+      float mouseInfluence = exp(-mouseDistance * 3.0);
 
-      // Mouse influence creates a local distortion.
-      vec2 mousePoint = mouse - 0.5;
-      mousePoint.x *= resolution.x / resolution.y;
+      float horizontal = (mouse.x - 0.5) * 2.0;
+      float vertical = (mouse.y - 0.5) * 2.0;
 
-      float mouseDistance = length(p - mousePoint);
-      float mouseForce = exp(-mouseDistance * 3.0);
-
-      // Organic domain warping.
-      vec2 q = p;
-
-      q.x += 0.075 * sin(p.y * 10.0 + t * 0.20);
-      q.y += 0.075 * cos(p.x * 11.0 - t * 0.16);
-
-      q.x += 0.035 * sin(p.y * 23.0 - t * 0.12);
-      q.y += 0.035 * cos(p.x * 19.0 + t * 0.14);
-
-      q += (p - mousePoint) * mouseForce * 0.055;
-
-      q *= scale * density;
-
-      // Main interference field.
-      // Overlapping waves create irregular connected contours.
-      float a = sin(
-        q.x * 12.0 +
-        2.0 * sin(q.y * 5.2 + t * 0.12)
-      );
-
-      float b = sin(
-        q.y * 12.0 +
-        2.0 * sin(q.x * 5.0 - t * 0.10)
-      );
-
-      float c = sin(
-        (q.x + q.y) * 8.5 +
-        1.1 * sin(q.x * 4.0 + t * 0.08)
-      );
-
-      float d = sin(
-        (q.x - q.y) * 9.0 +
-        1.2 * cos(q.y * 4.5 - t * 0.09)
-      );
-
-      float field = a + b + c * 0.65 + d * 0.55;
-
-      // Contour lines with soft, bright edges.
-      float contour = sin(field * 2.2);
-      float lineWidth = fwidth(contour) * 1.8 + 0.025;
-
-      float lines = 1.0 - smoothstep(
-        lineWidth,
-        lineWidth * 3.5,
-        abs(contour)
-      );
-
-      // Soft glow around the contour lines.
-      float glow = exp(-abs(contour) * 9.0) * 0.34;
-
-      // Central circular structure.
+      // Radial coordinates.
       float radius = length(p);
-
       float angle = atan(p.y, p.x);
 
-      float radialDistortion =
-        0.045 * sin(angle * 8.0 + t * 0.12) +
-        0.025 * sin(angle * 13.0 - t * 0.09);
+      // ------------------------------------------------
+      // ORGANIC RADIAL DISTORTION
+      // ------------------------------------------------
 
-      float radialField = radius + radialDistortion;
+      float radialWarp = 0.0;
 
-      float centralWave = sin(
-        radialField * 35.0 +
-        1.4 * sin(angle * 6.0)
+      radialWarp += sin(angle * 8.0 + t * 0.12) * 0.025;
+      radialWarp += sin(angle * 12.0 - t * 0.09) * 0.012;
+      radialWarp += cos(angle * 5.0 + t * 0.08) * 0.018;
+
+      radialWarp += sin(angle * 16.0 + radius * 12.0) * 0.009;
+
+      // Mouse gently bends the field.
+      radialWarp += mouseInfluence * sin(angle * 6.0 + t) * 0.045;
+
+      // Mouse changes radial spacing.
+      float frequency = 28.0 + horizontal * 10.0;
+
+      // Mouse vertical position changes pattern complexity.
+      float complexity = 1.0 + vertical * 0.35;
+
+      float r = radius + radialWarp;
+
+      // ------------------------------------------------
+      // PRIMARY CYMATIC FIELD
+      // ------------------------------------------------
+
+      float primary = r * frequency;
+
+      primary += sin(angle * 8.0 + r * 8.0) * 0.42;
+      primary += cos(angle * 12.0 - r * 5.0) * 0.24;
+      primary += sin(angle * 16.0 + r * 11.0) * 0.12;
+
+      primary *= complexity;
+
+      // ------------------------------------------------
+      // SECONDARY INTERFERENCE
+      // ------------------------------------------------
+
+      float secondary = r * (frequency * 1.47);
+
+      secondary += sin(angle * 6.0 - r * 7.0) * 0.35;
+      secondary += cos(angle * 14.0 + r * 4.0) * 0.18;
+
+      // A third field introduces smaller structures.
+      float tertiary = r * (frequency * 2.05);
+
+      tertiary += sin(angle * 10.0 + r * 13.0) * 0.25;
+      tertiary += cos(angle * 18.0 - r * 8.0) * 0.14;
+
+      // ------------------------------------------------
+      // HAIRLINE CONTOURS
+      // ------------------------------------------------
+
+      float lineA = hairline(primary);
+      float lineB = hairline(secondary);
+      float lineC = hairline(tertiary);
+
+      // Fine lines remain individually defined.
+      // Secondary lines are slightly less prominent.
+      float pattern = max(
+        lineA,
+        max(lineB * 0.72, lineC * 0.42)
       );
 
-      float centralLines = 1.0 - smoothstep(
-        0.08,
-        0.25,
-        abs(centralWave)
+      // ------------------------------------------------
+      // CENTRE STRUCTURE
+      // ------------------------------------------------
+
+      float centreField = radius * 42.0;
+
+      centreField += sin(angle * 8.0) * 0.4;
+      centreField += cos(angle * 12.0) * 0.2;
+
+      float centreLines = hairline(centreField);
+
+      float centreMask = 1.0 - smoothstep(0.02, 0.22, radius);
+
+      pattern = max(
+        pattern,
+        centreLines * centreMask
       );
 
-      // Blend the centre into the organic outer field.
-      float centreMask = exp(-radius * 3.0);
-      float pattern = mix(lines, max(lines, centralLines * 0.75), centreMask);
+      // ------------------------------------------------
+      // CLICK RIPPLE
+      // ------------------------------------------------
 
-      pattern += glow * 0.5;
-
-      // Expanding water ripple on click.
       float rippleAge = time - rippleStart;
-      float rippleRadius = max(rippleAge, 0.0) * 0.24;
 
+      float rippleRadius = max(rippleAge, 0.0) * 0.24;
       float rippleDistance = distance(uv, clickPosition);
 
-      float rippleWidth = 0.009 + max(rippleAge, 0.0) * 0.003;
+      float rippleWidth = 0.009 + max(rippleAge, 0.0) * 0.002;
 
-      float rippleRing = exp(
+      float rippleLine = exp(
         -pow(
           (rippleDistance - rippleRadius) / rippleWidth,
           2.0
         )
       );
 
-      float rippleSecond = exp(
+      float secondRipple = exp(
         -pow(
           (rippleDistance - rippleRadius * 0.72) /
-          (rippleWidth * 1.7),
+          (rippleWidth * 1.5),
           2.0
         )
       );
@@ -233,34 +254,21 @@ canvas {
       float rippleFade = exp(-max(rippleAge, 0.0) * 1.15);
 
       float ripple = (
-        rippleRing + rippleSecond * 0.3
+        rippleLine + secondRipple * 0.35
       ) * rippleFade * rippleActive;
 
-      // Ripple also disturbs the underlying pattern.
-      float rippleDisturbance = sin(
-        (rippleDistance - rippleRadius) * 75.0
-      );
+      pattern = max(pattern, ripple);
 
-      rippleDisturbance *= exp(
-        -abs(rippleDistance - rippleRadius) * 8.0
-      );
+      // ------------------------------------------------
+      // SUBTLE FLICKER
+      // ------------------------------------------------
 
-      rippleDisturbance *= rippleFade * rippleActive;
-
-      pattern += ripple * 0.9;
-      pattern += rippleDisturbance * 0.13;
-
-      // Fine monochrome grain.
-      float grain = hash(gl_FragCoord.xy + t) - 0.5;
-      pattern += grain * 0.045;
-
-      // Subtle flicker.
-      float flicker = 0.96 + 0.04 * sin(t * 17.0);
-      flicker *= 0.97 + 0.03 * sin(t * 29.0 + p.y * 8.0);
+      float flicker = 0.98 + 0.02 * sin(t * 17.0);
+      flicker *= 0.99 + 0.01 * sin(t * 29.0);
 
       float intensity = clamp(pattern * flicker, 0.0, 1.0);
 
-      // Pure black and white.
+      // Strict monochrome.
       gl_FragColor = vec4(vec3(intensity), 1.0);
     }
   `;
@@ -272,6 +280,7 @@ canvas {
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
       console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
       return null;
     }
 
@@ -297,8 +306,8 @@ canvas {
   gl.useProgram(program);
 
   const vertices = new Float32Array([
-    -1, -1, 1, -1, -1, 1,
-    -1, 1, 1, -1, 1, 1
+    -1, -1,  1, -1, -1,  1,
+    -1,  1,  1, -1,  1,  1
   ]);
 
   const buffer = gl.createBuffer();
@@ -306,40 +315,51 @@ canvas {
   gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
 
   const positionLocation = gl.getAttribLocation(program, "position");
+
   gl.enableVertexAttribArray(positionLocation);
   gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-  const uniform = name => gl.getUniformLocation(program, name);
+  const getUniform = name => gl.getUniformLocation(program, name);
 
   const uniforms = {
-    resolution: uniform("resolution"),
-    time: uniform("time"),
-    mouse: uniform("mouse"),
-    clickPosition: uniform("clickPosition"),
-    rippleStart: uniform("rippleStart"),
-    rippleActive: uniform("rippleActive")
+    resolution: getUniform("resolution"),
+    time: getUniform("time"),
+    mouse: getUniform("mouse"),
+    clickPosition: getUniform("clickPosition"),
+    rippleStart: getUniform("rippleStart"),
+    rippleActive: getUniform("rippleActive")
   };
 
-  let startTime = performance.now();
-  let mouse = { x: 0.5, y: 0.5 };
-  let targetMouse = { x: 0.5, y: 0.5 };
+  // --------------------------------------------------
+  // RESOLUTION
+  // --------------------------------------------------
 
-  let clickPosition = { x: 0.5, y: 0.5 };
-  let rippleStart = -10;
-  let rippleActive = 0;
+  let startTime = performance.now();
 
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = window.devicePixelRatio || 1;
 
     canvas.width = Math.floor(window.innerWidth * dpr);
     canvas.height = Math.floor(window.innerHeight * dpr);
 
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+
+    gl.uniform2f(
+      uniforms.resolution,
+      canvas.width,
+      canvas.height
+    );
   }
 
   window.addEventListener("resize", resize);
   resize();
+
+  // --------------------------------------------------
+  // MOUSE
+  // --------------------------------------------------
+
+  let mouse = { x: 0.5, y: 0.5 };
+  let targetMouse = { x: 0.5, y: 0.5 };
 
   window.addEventListener("pointermove", event => {
     targetMouse.x = event.clientX / window.innerWidth;
@@ -400,6 +420,7 @@ canvas {
 
     bassLFO.connect(bassLFOGain);
     bassLFOGain.connect(bassGain.gain);
+
     bass.connect(bassGain);
     bassGain.connect(masterGain);
 
@@ -451,6 +472,10 @@ canvas {
     audioStarted = true;
   }
 
+  // --------------------------------------------------
+  // LASER SOUND
+  // --------------------------------------------------
+
   function playLaser(x) {
     if (!audioContext || !masterGain) return;
 
@@ -461,6 +486,7 @@ canvas {
     const pan = audioContext.createStereoPanner();
 
     oscillator.type = "sawtooth";
+
     oscillator.frequency.setValueAtTime(880, now);
     oscillator.frequency.exponentialRampToValueAtTime(40.5, now + 1.35);
 
@@ -478,6 +504,10 @@ canvas {
     oscillator.stop(now + 1.75);
   }
 
+  // --------------------------------------------------
+  // DROPLET SOUND
+  // --------------------------------------------------
+
   function playDroplet(x) {
     if (!audioContext || !masterGain) return;
 
@@ -488,6 +518,7 @@ canvas {
     const pan = audioContext.createStereoPanner();
 
     oscillator.type = "sine";
+
     oscillator.frequency.setValueAtTime(680, now);
     oscillator.frequency.exponentialRampToValueAtTime(115, now + 0.65);
 
@@ -506,8 +537,12 @@ canvas {
   }
 
   // --------------------------------------------------
-  // CLICK: RIPPLE + SOUND
+  // CLICK INTERACTION
   // --------------------------------------------------
+
+  let clickPosition = { x: 0.5, y: 0.5 };
+  let rippleStart = -10;
+  let rippleActive = 0;
 
   window.addEventListener("pointerdown", event => {
     startAudio();
@@ -541,11 +576,13 @@ canvas {
 
     gl.uniform1f(uniforms.time, elapsed);
     gl.uniform2f(uniforms.mouse, mouse.x, mouse.y);
+
     gl.uniform2f(
       uniforms.clickPosition,
       clickPosition.x,
       clickPosition.y
     );
+
     gl.uniform1f(uniforms.rippleStart, rippleStart);
     gl.uniform1f(uniforms.rippleActive, rippleActive);
 
